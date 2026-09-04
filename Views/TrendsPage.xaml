@@ -1,0 +1,95 @@
+<Page
+    x:Class="LocalSecurityAudit.Views.TrendsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:lvc="using:LiveChartsCore.SkiaSharpView.WinUI"
+    Background="Transparent">
+    <Grid Background="Transparent" RowDefinitions="Auto,*">
+        <Grid Grid.Row="0" Height="60" Padding="32,0" ColumnDefinitions="Auto,*,Auto">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <Ellipse Width="8" Height="8" Fill="{ThemeResource AccentFillColorDefaultBrush}" />
+                <StackPanel Spacing="0">
+                    <TextBlock Text="TRENDS" FontSize="13" FontWeight="SemiBold" />
+                    <TextBlock Text="Seven-day audit history" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </StackPanel>
+            <Button Grid.Column="2" Height="32" Padding="12,0" Command="{x:Bind ViewModel.LoadDataCommand}" AutomationProperties.Name="Refresh trend data" ToolTipService.ToolTip="Reload historical audit data">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <FontIcon Glyph="&#xE72C;" FontSize="12" />
+                    <TextBlock Text="Refresh" FontSize="13" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <ScrollViewer Grid.Row="1"
+                      Padding="32,8,32,28"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="16">
+                <InfoBar Grid.Row="0"
+                         IsOpen="{x:Bind ViewModel.IsStatusVisible, Mode=TwoWay}"
+                         Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}"
+                         Message="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
+                         IsClosable="True"
+                         Closed="OnStatusBarClosed" />
+
+        <Grid Grid.Row="1" Height="142" ColumnDefinitions="1.1*,1.1*,1.3*" ColumnSpacing="16">
+                    <Border Padding="18,16" Style="{StaticResource LayerCardStyle}" AutomationProperties.Name="Average issues summary">
+                        <Grid RowDefinitions="Auto,Auto,*">
+                            <TextBlock Text="AVG ISSUES" Style="{StaticResource SectionLabelStyle}" />
+                            <TextBlock Grid.Row="1" Margin="0,8,0,0" Text="{x:Bind ViewModel.AverageIssueCount, Mode=OneWay, Converter={StaticResource DoubleFormatConverter}, ConverterParameter=F1}" Style="{StaticResource MetricPrimaryStyle}" />
+                            <TextBlock Grid.Row="2" Margin="0,3,0,0" Text="per day · past 7 days" Style="{StaticResource MonoDetailStyle}" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Column="1" Padding="18,16" Style="{StaticResource LayerCardStyle}" AutomationProperties.Name="Average health summary">
+                        <Grid RowDefinitions="Auto,Auto,*">
+                            <TextBlock Text="AVG HEALTH" Style="{StaticResource SectionLabelStyle}" />
+                            <TextBlock Grid.Row="1" Margin="0,8,0,0" Text="{x:Bind ViewModel.AverageHealthScore, Mode=OneWay, Converter={StaticResource DoubleFormatConverter}, ConverterParameter=F0}" Style="{StaticResource MetricPrimaryStyle}" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                            <TextBlock Grid.Row="2" Margin="0,3,0,0" Text="score · past 7 days" Style="{StaticResource MonoDetailStyle}" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Column="2" Padding="18,16" Style="{StaticResource LayerCardStyle}" AutomationProperties.Name="Audit trend status">
+                        <Grid RowDefinitions="Auto,Auto,*">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="TREND STATUS" Style="{StaticResource SectionLabelStyle}" />
+                                <Ellipse Grid.Column="1" Width="8" Height="8" Fill="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
+                            </Grid>
+                            <TextBlock Grid.Row="1" Margin="0,8,0,0" Text="{x:Bind ViewModel.TrendStatus, Mode=OneWay}" Style="{StaticResource PageTitleStyle}" />
+                            <TextBlock Grid.Row="2" Margin="0,3,0,0" Text="Compared with the first day shown" Style="{StaticResource MonoDetailStyle}" />
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <Grid Grid.Row="2" Height="410" RowDefinitions="*,*" RowSpacing="16">
+                    <Border Padding="18,16" Style="{StaticResource LayerCardStyle}" AutomationProperties.Name="Issue count trend">
+                        <Grid RowDefinitions="Auto,Auto,*">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="ISSUE COUNT" Style="{StaticResource SectionLabelStyle}" />
+                                <TextBlock Grid.Column="1" Text="PAST 7 DAYS" Style="{StaticResource MetaLabelStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            </Grid>
+                            <TextBlock Grid.Row="1" Margin="0,7,0,0" Text="Daily detected security issues" Style="{StaticResource MetricSecondaryStyle}" />
+                            <Border Grid.Row="2" Margin="0,12,0,0">
+                                <lvc:CartesianChart x:Name="IssueCountChart" AutomationProperties.Name="Daily detected security issues chart" />
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Padding="18,16" Style="{StaticResource LayerCardStyle}" AutomationProperties.Name="Health score trend">
+                        <Grid RowDefinitions="Auto,Auto,*">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="HEALTH SCORE" Style="{StaticResource SectionLabelStyle}" />
+                                <TextBlock Grid.Column="1" Text="PAST 7 DAYS" Style="{StaticResource MetaLabelStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            </Grid>
+                            <TextBlock Grid.Row="1" Margin="0,7,0,0" Text="System security health trend" Style="{StaticResource MetricSecondaryStyle}" />
+                            <Border Grid.Row="2" Margin="0,12,0,0">
+                                <lvc:CartesianChart x:Name="HealthScoreChart" AutomationProperties.Name="System security health trend chart" />
+                            </Border>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</Page>
