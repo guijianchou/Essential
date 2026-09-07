@@ -142,6 +142,8 @@ function New-Analysis($Main, $Fallback = $null, [int]$Parallel = 1, [string]$Mai
     $settingsType = $assembly.GetType('LocalSecurityAudit.Services.SettingsService', $true)
     $settingsService = [System.Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($settingsType)
     $settings = [LocalSecurityAudit.Models.AppSettings]::new()
+    $settings.Mode = 'extended'
+    $settingsType.GetField('<ActiveMode>k__BackingField', $flags).SetValue($settingsService, 'extended')
     $settings.MaxConcurrentAnalysis = $Parallel
     $settings.EnableSmartFiltering = $false
     $settings.EnableCaching = $false

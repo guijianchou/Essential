@@ -15,6 +15,7 @@ public sealed partial class AiAnalysisService
         IProgress<AuditProgressEventArgs>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        _settingsService.EnsureExtendedMode();
         var groups = findings.Where(issue => !issue.HasBilingualText)
             .GroupBy(issue => JsonSerializer.Serialize(new
             {

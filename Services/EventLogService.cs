@@ -16,10 +16,12 @@ namespace LocalSecurityAudit.Services;
 public class EventLogService
 {
     private readonly DiagnosticLogService _diagnosticLogService;
+    private readonly SettingsService _settingsService;
 
-    public EventLogService(DiagnosticLogService diagnosticLogService)
+    public EventLogService(DiagnosticLogService diagnosticLogService, SettingsService settingsService)
     {
         _diagnosticLogService = diagnosticLogService;
+        _settingsService = settingsService;
     }
 
     // Key event IDs
@@ -103,6 +105,7 @@ public class EventLogService
         CancellationToken cancellationToken = default,
         IProgress<AuditProgressEventArgs>? progress = null)
     {
+        _settingsService.EnsureExtendedMode();
         var stopwatch = Stopwatch.StartNew();
         _diagnosticLogService.Write(
             $"Event log read started: from={from:O}, to={to:O}");
@@ -166,6 +169,7 @@ public class EventLogService
         string xpathQuery,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        _settingsService.EnsureExtendedMode();
         await Task.Run(() => { }, cancellationToken); // Ensure async context
 
         EventLogQuery query = new(logName, PathType.LogName, xpathQuery);

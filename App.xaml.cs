@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.UI.Xaml;
@@ -16,7 +17,7 @@ public partial class App : Application
     public static new App Current => (App)Application.Current;
     public IServiceProvider Services => _host.Services;
 
-    public App()
+    public App(SettingsService settings)
     {
         InitializeComponent();
 
@@ -30,11 +31,11 @@ public partial class App : Application
                 services.AddSingleton<SettingsViewModel>();
 
                 // Register Services
-                services.AddSingleton<SettingsService>();
+                services.AddSingleton(settings);
                 services.AddSingleton<DiagnosticLogService>();
                 services.AddSingleton<EventLogService>();
                 services.AddSingleton<AiAnalysisService>();
-                services.AddSingleton(sp => DataStorageService.CreateAsync().GetAwaiter().GetResult());
+                services.AddSingleton(sp => DataStorageService.CreateAsync(settings.ActiveMode).GetAwaiter().GetResult());
                 services.AddSingleton<AuditSchedulerService>();
                 services.AddHostedService(serviceProvider =>
                     serviceProvider.GetRequiredService<AuditSchedulerService>());
@@ -74,6 +75,12 @@ public partial class App : Application
         }
 
         window.DispatcherQueue.TryEnqueue(window.BringToFront);
+    }
+
+    public async Task ExitForModeChangeAsync()
+    {
+        await _host.StopAsync();
+        _mainWindow?.ExitApplication();
     }
 
     public static T GetService<T>() where T : class

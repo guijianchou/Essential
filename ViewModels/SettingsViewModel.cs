@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -12,12 +14,13 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Dispatching;
 using LocalSecurityAudit.Models;
 using LocalSecurityAudit.Services;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace LocalSecurityAudit.ViewModels;
 
 public partial class SettingsViewModel : ObservableObject
 {
-    public string VersionText => AppText.Format("Version {0}", typeof(App).Assembly.GetName().Version?.ToString(3));
+    public string VersionText => AppText.Format("Version {0}", typeof(App).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
 
     private readonly DataStorageService _storageService;
     private readonly SettingsService _settingsService;
@@ -25,6 +28,17 @@ public partial class SettingsViewModel : ObservableObject
     private readonly DiagnosticLogService _diagnosticLogService;
     private readonly AuditSchedulerService _schedulerService;
     private readonly DispatcherQueue? _dispatcherQueue;
+
+    [ObservableProperty]
+    private int modeIndex;
+
+    public bool IsAssistantMode => _settingsService.IsAssistantMode;
+    public bool IsExtendedMode => !IsAssistantMode;
+    public string ActiveModeText => AppText.Get(IsAssistantMode ? "Assistant mode" : "Extended mode");
+    public string DatabasePath => _storageService.DatabasePath;
+    public string AssistantDatabasePath => DataStorageService.GetDatabasePath(AppMode.Assistant);
+    public string AssistantGuidePath => Path.Combine(AppContext.BaseDirectory, "AGENTS.md");
+    public bool IsModeChangePending => _settingsService.Current.Mode != _settingsService.ActiveMode;
 
     [ObservableProperty]
     private bool showOperationStatus;
@@ -123,11 +137,13 @@ public partial class SettingsViewModel : ObservableObject
         AppText.Current.LanguageChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(VersionText));
+            OnPropertyChanged(nameof(ActiveModeText));
             UpdatePipelineSummary();
             UpdatePolicyStatus(AgentInstructions);
             _ = RefreshOptimizationPreviewAsync();
         };
         LoadFromSettings(_settingsService.Current);
+        _schedulerService.HistoryUpdated += (_, _) => _ = UpdateDatabaseStatsAsync();
         _ = UpdateDatabaseStatsAsync();
     }
 
@@ -143,7 +159,10 @@ public partial class SettingsViewModel : ObservableObject
         {
             IsBusy = true;
             _settingsService.Save(ToSettings());
-            ShowStatus(InfoBarSeverity.Success, AppText.Get("Settings saved. They apply to the next audit."));
+            OnPropertyChanged(nameof(IsModeChangePending));
+            ShowStatus(InfoBarSeverity.Success, AppText.Get(IsModeChangePending
+                ? "Mode saved. Fully exit and reopen the app normally from File Explorer to apply it."
+                : "Settings saved."));
             UpdatePipelineSummary();
         }
         catch (Exception ex)
@@ -153,6 +172,52 @@ public partial class SettingsViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveModeAndExitAsync()
+    {
+        if (IsBusy || IsOptimizing || _schedulerService.IsScanning)
+        {
+            ShowStatus(InfoBarSeverity.Warning, AppText.Get("Wait for the current operation to finish before switching modes."));
+            return;
+        }
+        try
+        {
+            IsBusy = true;
+            _settingsService.Save(ToSettings());
+            OnPropertyChanged(nameof(IsModeChangePending));
+            await App.Current.ExitForModeChangeAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus(InfoBarSeverity.Error, AppText.Format("Save failed: {0}", ex.Message));
+        }
+        finally { IsBusy = false; }
+    }
+
+    [RelayCommand]
+    private void OpenAssistantGuide()
+    {
+        try { Process.Start(new ProcessStartInfo(AssistantGuidePath) { UseShellExecute = true })?.Dispose(); }
+        catch { ShowStatus(InfoBarSeverity.Warning, AppText.Get("Open the AGENTS.md path below in a text editor.")); }
+    }
+
+    [RelayCommand]
+    private void CopyAssistantPrompt()
+    {
+        var data = new DataPackage();
+        data.SetText(AppText.Format("Read {0} and perform one assistant-mode audit of the past 24 hours. Use the documented collection and validated publish workflow. Write only to {1}. Do not start subagents, change system settings, or call the app's AI Hub. Record unavailable logs honestly. Ask before any additional Windows elevation.",
+            AssistantGuidePath, AssistantDatabasePath));
+        try
+        {
+            Clipboard.SetContent(data);
+            ShowStatus(InfoBarSeverity.Success, AppText.Get("Audit prompt copied. Paste it into your own Claude or Codex session."));
+        }
+        catch
+        {
+            ShowStatus(InfoBarSeverity.Warning, AppText.Get("The clipboard is unavailable. Open AGENTS.md to copy the workflow manually."));
         }
     }
 
@@ -224,7 +289,7 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task TestApiConnectionAsync(AiTarget? target)
     {
-        if (target == null || IsBusy)
+        if (IsAssistantMode || target == null || IsBusy)
         {
             return;
         }
@@ -250,7 +315,7 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task CleanupDataAsync()
     {
-        if (IsBusy)
+        if (IsAssistantMode || IsBusy)
         {
             return;
         }
@@ -275,7 +340,7 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task VacuumDatabaseAsync()
     {
-        if (IsBusy)
+        if (IsAssistantMode || IsBusy)
         {
             return;
         }
@@ -463,6 +528,7 @@ public partial class SettingsViewModel : ObservableObject
 
     private void LoadFromSettings(AppSettings settings)
     {
+        ModeIndex = settings.Mode == AppMode.Extended ? 1 : 0;
         LanguageIndex = settings.Language == "zh-CN" ? 1 : 0;
         AutoScanEnabled = settings.AutoScanEnabled;
         MinimizeToTray = settings.MinimizeToTray;
@@ -546,6 +612,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         return new AppSettings
         {
+            Mode = ModeIndex == 1 ? AppMode.Extended : AppMode.Assistant,
             Language = LanguageIndex == 1 ? "zh-CN" : "en",
             Theme = ThemeIndex switch
             {
@@ -606,18 +673,14 @@ public partial class SettingsViewModel : ObservableObject
         ShowOperationStatus = true;
     }
 
+    [RelayCommand]
     private async Task UpdateDatabaseStatsAsync()
     {
         try
         {
-            var dbPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "LocalSecurityAudit",
-                "audit_data.db");
-
-            string databaseSize = File.Exists(dbPath)
-                ? $"{new FileInfo(dbPath).Length / (1024.0 * 1024.0):F2} MB"
-                : "0 MB";
+            long bytes = new[] { DatabasePath, DatabasePath + "-wal" }
+                .Where(File.Exists).Sum(path => new FileInfo(path).Length);
+            string databaseSize = $"{bytes / (1024.0 * 1024.0):F2} MB";
             int auditRecordCount = await _storageService.GetAuditRecordCountAsync();
             UpdateDatabaseStats(databaseSize, auditRecordCount);
         }

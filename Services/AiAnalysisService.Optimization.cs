@@ -14,6 +14,7 @@ public sealed partial class AiAnalysisService
         IReadOnlyList<AuditIssue> findings, string model,
         IProgress<AuditProgressEventArgs>? progress = null, CancellationToken cancellationToken = default)
     {
+        _settingsService.EnsureExtendedMode();
         if (findings.Count == 0) return new();
         if (findings.Count > 8 || findings.Any(issue => !AiModelCatalog.CanOptimize(issue.AnalysisModel, model)))
             throw new InvalidOperationException(AppText.Get("Only a higher model can optimize these findings."));

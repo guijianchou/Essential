@@ -31,6 +31,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
     private int _scheduledIntervalHours;
     private AuditStage _currentStage;
     public bool IsScanning { get; private set; }
+    public bool IsAssistantMode => _settingsService.IsAssistantMode;
 
     public event EventHandler<AuditCompletedEventArgs>? AuditCompleted;
     public event EventHandler<AuditFailedEventArgs>? AuditFailed;
@@ -67,6 +68,12 @@ public class AuditSchedulerService : IHostedService, IDisposable
             _isStopping = false;
             startCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _cts = startCts;
+
+            if (IsAssistantMode)
+            {
+                _runningTask = Task.Run(() => WatchAssistantResultsAsync(startCts.Token), startCts.Token);
+                return Task.CompletedTask;
+            }
 
             StartScheduleLoopCore();
 
@@ -280,6 +287,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
+        if (IsAssistantMode) return;
         if (_scheduledIntervalHours == _settingsService.Current.ScanIntervalHours) return;
         _scheduledIntervalHours = _settingsService.Current.ScanIntervalHours;
         RestartScheduleLoop();
@@ -289,6 +297,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
         bool fastScan = true,
         CancellationToken cancellationToken = default)
     {
+        _settingsService.EnsureExtendedMode();
         await _auditGate.WaitAsync(cancellationToken);
         var stopwatch = Stopwatch.StartNew();
         try
@@ -356,6 +365,9 @@ public class AuditSchedulerService : IHostedService, IDisposable
                 Findings = issues,
                 Metadata = new()
                 {
+                    { "SchemaVersion", JsonSerializer.SerializeToElement(1) },
+                    { "Mode", JsonSerializer.SerializeToElement(AppMode.Extended) },
+                    { "CoverageStatus", JsonSerializer.SerializeToElement("complete") },
                     { "EventCount", JsonSerializer.SerializeToElement(events.Count) },
                     { "AnalyzedEventCount", JsonSerializer.SerializeToElement(analyzedEventCount) },
                     { "FilteredEventCount", JsonSerializer.SerializeToElement(events.Count - analyzedEventCount) },
@@ -439,6 +451,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
     public async Task<int> OptimizeHistoryAsync(string model, IProgress<AuditProgressEventArgs>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        _settingsService.EnsureExtendedMode();
         if (AiModelCatalog.Rank(model) < 0) throw new InvalidOperationException(AppText.Get("Select an explicit optimization model."));
         await _auditGate.WaitAsync(cancellationToken);
         Task<int> task;
@@ -522,6 +535,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
     private void StartHistoryTranslation()
     {
+        if (IsAssistantMode) return;
         lock (_lifecycleLock)
         {
             if (_isStopping || _historyTask is { IsCompleted: false }) return;
@@ -544,6 +558,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
     private async Task UpgradeLegacyFindingsAsync(CancellationToken cancellationToken)
     {
+        _settingsService.EnsureExtendedMode();
         string status = "English + Simplified Chinese saved";
         var state = AuditStepState.Done;
         try
@@ -603,6 +618,23 @@ public class AuditSchedulerService : IHostedService, IDisposable
     {
         _settingsService.SettingsChanged -= OnSettingsChanged;
         _auditGate.Dispose();
+    }
+
+    private async Task WatchAssistantResultsAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await _storageService.WatchForChangesAsync(() => HistoryUpdated?.Invoke(this, EventArgs.Empty), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
+            catch (Exception ex)
+            {
+                _diagnosticLogService.WriteException("Assistant result refresh deferred", ex);
+                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            }
+        }
     }
 
     private static int CalculateHealthScore(List<AuditIssue> issues)

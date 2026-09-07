@@ -61,6 +61,7 @@ public sealed partial class AiAnalysisService
         IProgress<AuditProgressEventArgs>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        _settingsService.EnsureExtendedMode();
         cancellationToken.ThrowIfCancellationRequested();
         if (events.Count == 0)
         {
@@ -175,6 +176,7 @@ public sealed partial class AiAnalysisService
 
     public async Task<(bool Success, string Message)> TestConnectionAsync(AiTarget target)
     {
+        _settingsService.EnsureExtendedMode();
         if (!Uri.TryCreate(target.BaseUrl?.Trim(), UriKind.Absolute, out var baseUri)
             || (baseUri.Scheme != Uri.UriSchemeHttps && baseUri.Scheme != Uri.UriSchemeHttp))
         {

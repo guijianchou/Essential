@@ -50,7 +50,11 @@
                 <TextBlock Text="{Binding [Dashboard], Source={StaticResource AppText}}" Style="{StaticResource SubtitleTextStyle}" />
                 <TextBlock Text="{x:Bind ViewModel.LastAuditHeadline, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <Button Grid.Column="1" Content="{Binding [Refreshresults], Source={StaticResource AppText}}" VerticalAlignment="Center"
+                    Command="{x:Bind ViewModel.LoadDataCommand}" IsEnabled="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"
+                    Visibility="{x:Bind ViewModel.IsAssistantMode, Converter={StaticResource BoolToVisibilityConverter}}" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"
+                        Visibility="{x:Bind ViewModel.IsExtendedMode, Converter={StaticResource BoolToVisibilityConverter}}">
                 <Button Height="32" Padding="12,0" Command="{x:Bind ViewModel.RunFastScanCommand}" IsEnabled="{x:Bind ViewModel.IsLoading, Converter={StaticResource InverseBoolConverter}, Mode=OneWay}" AutomationProperties.Name="{Binding [Runfastscan], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Scanrecenteventsusingtheconfiguredtimerange], Source={StaticResource AppText}}">
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <FontIcon Glyph="&#xE8FE;" FontSize="12" />
@@ -71,6 +75,10 @@
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="16">
+                <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
+                         Title="{Binding [Assistantmode], Source={StaticResource AppText}}"
+                         Message="{Binding [DisplayonlyNologcollectionorAIrequestsExternalresultsrefreshautomatically], Source={StaticResource AppText}}"
+                         Visibility="{x:Bind ViewModel.IsAssistantMode, Converter={StaticResource BoolToVisibilityConverter}}" />
                 <InfoBar IsOpen="{x:Bind ViewModel.IsStatusVisible, Mode=TwoWay}"
                          Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}"
                          Message="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
@@ -252,9 +260,9 @@
                             <TextBlock Text="{x:Bind ViewModel.HealthSummaryText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" />
                         </StackPanel>
                         <StackPanel Padding="0,28" Spacing="6" HorizontalAlignment="Center" Visibility="{x:Bind ViewModel.ShowEmptyIssues, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                            <FontIcon Glyph="&#xE73E;" FontSize="26" Foreground="{ThemeResource HealthGoodBrush}" HorizontalAlignment="Center" />
-                            <TextBlock Text="{Binding [Nofindingsinthisaudit], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" HorizontalAlignment="Center" />
-                            <TextBlock Text="{Binding [Thescannedeventsdidnotproduceanythingtoreview], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" HorizontalAlignment="Center" />
+                            <FontIcon Glyph="&#xE946;" FontSize="26" Foreground="{ThemeResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{x:Bind ViewModel.EmptyFindingsTitle, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{x:Bind ViewModel.EmptyFindingsDescription, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
                         </StackPanel>
                         <StackPanel Padding="0,20" Spacing="4" HorizontalAlignment="Center" Visibility="{x:Bind ViewModel.ShowNoFilterMatches, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                             <TextBlock Text="{Binding [Nomatchingfindings], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" HorizontalAlignment="Center" />

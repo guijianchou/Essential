@@ -51,7 +51,7 @@ public sealed partial class MainWindow : Window
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        AppWindow.Title = AppText.Get("Local Security Audit");
+        AppWindow.Title = ViewModel.WindowTitle;
         ApplyInitialBounds();
         _sizeGuard = new WindowSizeGuard(this, MinimumWidthDip, MinimumHeightDip);
         ApplyWindowIcon();
@@ -301,7 +301,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
-        AppWindow.Title = AppText.Get("Local Security Audit");
+        AppWindow.Title = ViewModel.WindowTitle;
         Root.Language = AppText.Culture.Name;
         if (FindMenuItem("dashboard") is { } dashboardItem)
             dashboardItem.Content = AppText.Get("Dashboard");
@@ -519,6 +519,9 @@ public sealed partial class MainWindow : Window
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     private void OnTrayExitRequested(object? sender, EventArgs e)
+        => ExitApplication();
+
+    public void ExitApplication()
     {
         _isClosing = true;
         Close();

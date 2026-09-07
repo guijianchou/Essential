@@ -311,12 +311,15 @@ public sealed class SettingsService
     private readonly bool _policyUpgraded;
 
     public AppSettings Current { get; private set; }
+    // A saved mode change takes effect only in a new process. Never switch a live scanner's database.
+    public string ActiveMode { get; }
+    public bool IsAssistantMode => ActiveMode != AppMode.Extended;
     public string AgentInstructionsPath => _agentInstructionsPath;
     public string SettingsPath => _settingsPath;
 
     public event EventHandler? SettingsChanged;
 
-    public SettingsService()
+    public SettingsService(string? startupMode = null)
     {
         var appDataPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -326,10 +329,17 @@ public sealed class SettingsService
         _settingsPath = Path.Combine(appDataPath, "settings.json");
         _agentInstructionsPath = Path.Combine(appDataPath, "AGENTS.md");
         Current = LoadSettings();
+        ActiveMode = AppMode.Normalize(startupMode ?? Current.Mode);
         AppText.Current.SetLanguage(Current.Language);
         _policyUpgraded = UpgradeLegacyAgentInstructions(Current);
         EnsureAgentInstructionsFile(Current.AgentInstructions);
         PersistNormalizedSettingsIfNeeded();
+    }
+
+    public void EnsureExtendedMode()
+    {
+        if (IsAssistantMode)
+            throw new InvalidOperationException(AppText.Get("Assistant mode only displays external results. Switch to extended mode and reopen the app to use this action."));
     }
 
     public AppSettings CreateDefaultSettings()
@@ -406,6 +416,7 @@ public sealed class SettingsService
 
             if (_policyUpgraded
                 || stored == null
+                || stored.Mode != Current.Mode
                 || stored.RetentionPolicyVersion != Current.RetentionPolicyVersion
                 || string.IsNullOrWhiteSpace(stored.AgentInstructions)
                 || stored.AiTargets == null
@@ -577,6 +588,7 @@ public sealed class SettingsService
 
     private static void Normalize(AppSettings settings)
     {
+        settings.Mode = AppMode.Normalize(settings.Mode);
         settings.Language = settings.Language == "zh-CN" ? "zh-CN" : "en";
         settings.Theme = settings.Theme is "system" or "light" or "dark"
             ? settings.Theme

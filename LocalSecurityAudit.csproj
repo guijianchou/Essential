@@ -4,9 +4,11 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>LocalSecurityAudit</RootNamespace>
-    <Version>0.3.4</Version>
+    <Version>0.3.4-beta.1</Version>
     <AssemblyVersion>0.3.4.0</AssemblyVersion>
-    <FileVersion>0.3.4.0</FileVersion>
+    <FileVersion>0.3.4.1</FileVersion>
+    <InformationalVersion>0.3.4 beta1</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x86;x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
@@ -21,6 +23,7 @@
 
   <ItemGroup>
     <Content Include="Assets\**" />
+    <Content Include="AGENTS.md;tools\collect-assistant-events.ps1;tools\publish-assistant-audit.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Resources\Strings.zh-CN.json" WithCulture="false" LogicalName="LocalSecurityAudit.Resources.Strings.zh-CN.json" />
   </ItemGroup>
 

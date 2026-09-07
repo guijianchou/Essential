@@ -244,6 +244,12 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         AppText.Current.LanguageChanged += OnLanguageChanged;
     }
 
+    public bool IsAssistantMode => _storageService.IsReadOnly;
+    public bool IsExtendedMode => !IsAssistantMode;
+    public string EmptyFindingsTitle => AppText.Get(HasAssessment ? "No findings in this audit" : "No assessment available");
+    public string EmptyFindingsDescription => HasAssessment
+        ? AppText.Get("The scanned events did not produce anything to review.") : HealthSummaryText;
+
     private void OnLanguageChanged(object? sender, EventArgs e)
     {
         EnqueueOnUi(() =>
@@ -405,7 +411,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
 
     private async Task RunScanAsync(bool fastScan)
     {
-        if (_isRunningScan || IsLoading || _schedulerService.IsScanning)
+        if (IsAssistantMode || _isRunningScan || IsLoading || _schedulerService.IsScanning)
         {
             return;
         }
@@ -441,7 +447,8 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         HealthScoreText = "–";
         HealthVerdict = AppText.Get(_selectedDate == null ? "No audit yet" : "No audit on this day");
         HealthSummaryText = AppText.Get(_selectedDate == null
-            ? "Run a fast scan for the past few hours or a full scan for the past 24 hours."
+            ? IsAssistantMode ? "Waiting for Claude or Codex to publish an audit. Open Settings > Mode for the workflow."
+                : "Run a fast scan for the past few hours or a full scan for the past 24 hours."
             : "Choose another day to view a saved audit.");
         HealthDeductionText = string.Empty;
         LastAuditHeadline = _selectedDate is { } day ? AppText.Format("No audit on {0:d}", day) : AppText.Get("No audit has completed yet");
@@ -451,7 +458,8 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         EventCountText = "–";
         EventCount = 0;
         CoverageState = AppText.Get("No audit");
-        CoverageText = AppText.Get("Run a scan to establish the evidence coverage.");
+        CoverageText = AppText.Get(IsAssistantMode ? "External results will appear automatically after a successful publish."
+            : "Run a scan to establish the evidence coverage.");
         PriorityFindings = new List<AuditIssueEnhanced>();
         TotalFindings = 0;
         HighCount = 0;
@@ -488,8 +496,10 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         HealthScore = result.HasAssessment ? breakdown.Score : 0;
         HealthBand = breakdown.Band;
         HealthScoreText = result.HasAssessment ? breakdown.Score.ToString(AppText.Culture) : "--";
-        HealthVerdict = result.HasAssessment ? breakdown.Verdict : AppText.Get("Not assessed");
-        HealthSummaryText = !result.HasAssessment ? AppText.Get("No events were analyzed by AI.") : breakdown.TotalFindings == 0
+        HealthVerdict = result.HasIncompleteCoverage ? AppText.Get("Incomplete coverage")
+            : result.HasAssessment ? breakdown.Verdict : AppText.Get("Not assessed");
+        HealthSummaryText = result.HasIncompleteCoverage ? AppText.Get("Some logs were unavailable or truncated. Findings remain visible, but this audit has no health score.")
+            : !result.HasAssessment ? AppText.Get("No events were analyzed by AI.") : breakdown.TotalFindings == 0
             ? AppText.Get("No findings in this audit")
             : AppText.Format("Based on {0} high, {1} medium and {2} low findings.", breakdown.HighCount, breakdown.MediumCount, breakdown.LowCount);
         HealthDeductionText = result.HasAssessment ? BuildDeductionText(breakdown) : string.Empty;
@@ -512,7 +522,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         int eventCount = ReadMetadataInt(result, "EventCount");
         EventCount = eventCount;
         EventCountText = eventCount.ToString("N0", AppText.Culture);
-        CoverageState = eventCount == 0
+        CoverageState = result.HasIncompleteCoverage ? AppText.Get("Incomplete coverage") : eventCount == 0
             ? AppText.Get("No events read")
             : !result.HasAssessment ? AppText.Get("Not assessed")
             : _allIssues.Count == 0 ? AppText.Get("Scanned · no findings") : AppText.Get("Evidence available");
@@ -522,6 +532,8 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
                 ? AppText.Format("{0:N0} events collected; {1:N0} analyzed by AI; {2:N0} excluded by filtering or sampling.",
                     eventCount, ReadMetadataInt(result, "AnalyzedEventCount"), ReadMetadataInt(result, "FilteredEventCount"))
                 : AppText.Format("{0:N0} events collected. This older audit did not record how many were analyzed by AI.", eventCount);
+        if (result.HasIncompleteCoverage)
+            CoverageText = $"{AppText.Get("Some logs were unavailable or truncated. Findings remain visible, but this audit has no health score.")} {ReadMetadataString(result, "CoverageNotes")}".Trim();
 
         RebuildSections();
     }
@@ -580,6 +592,8 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
             .ToList();
 
         ShowEmptyIssues = HasAuditData && _allIssues.Count == 0;
+        OnPropertyChanged(nameof(EmptyFindingsTitle));
+        OnPropertyChanged(nameof(EmptyFindingsDescription));
         ShowNoFilterMatches = HasAuditData && _allIssues.Count > 0 && shown == 0;
 
         if (!HasAuditData)

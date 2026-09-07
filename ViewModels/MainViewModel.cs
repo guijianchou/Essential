@@ -114,6 +114,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public string WorkflowCountText => AppText.Format("{0}/{1} stages", Steps.Count(step => step.IsDone
         || step.State == AuditStepState.Skipped && step.CompletionFraction == 1), Steps.Count);
     public string WorkflowProgressLabel => AppText.Get("Stage completion");
+    public string ModeText => AppText.Get(_scheduler.IsAssistantMode ? "Assistant mode" : "Extended mode");
+    public string WindowTitle => $"{AppText.Get("Local Security Audit")} · {ModeText}";
 
     public MainViewModel(AuditSchedulerService scheduler)
     {
@@ -163,6 +165,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void Refresh()
     {
+        OnPropertyChanged(nameof(WindowTitle));
         WorkflowTitle = AppText.Get(!_hasRun ? string.Empty
             : Steps.Take(4).Any(step => step.IsFailed) ? "Scan failed"
             : Steps[(int)AuditStage.Translate].IsFailed ? "Translation pending"

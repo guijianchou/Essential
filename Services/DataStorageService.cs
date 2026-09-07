@@ -15,31 +15,46 @@ public class DataStorageService
 {
     private readonly string _connectionString;
     private readonly string _dbPath;
+    public string DatabasePath => _dbPath;
+    public bool IsReadOnly { get; }
 
-    private DataStorageService()
+    private DataStorageService(string mode, string? dataDirectory)
     {
-        string appDataPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LocalSecurityAudit");
-
-        Directory.CreateDirectory(appDataPath);
-
-        _dbPath = Path.Combine(appDataPath, "audit_data.db");
-        _connectionString = $"Data Source={_dbPath}";
+        IsReadOnly = AppMode.Normalize(mode) == AppMode.Assistant;
+        _dbPath = GetDatabasePath(mode, dataDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = IsReadOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            DefaultTimeout = 5
+        }.ToString();
 
         SQLitePCL.Batteries_V2.Init();
     }
 
-    public static async Task<DataStorageService> CreateAsync()
+    public static string GetDatabasePath(string mode, string? dataDirectory = null)
     {
-        var service = new DataStorageService();
-        await service.InitializeDatabaseAsync();
+        string root = dataDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LocalSecurityAudit");
+        return Path.GetFullPath(AppMode.Normalize(mode) == AppMode.Assistant
+            ? Path.Combine(root, "assistant", "audit_data.db") : Path.Combine(root, "audit_data.db"));
+    }
+
+    public static async Task<DataStorageService> CreateAsync(string mode = AppMode.Assistant, string? dataDirectory = null)
+    {
+        var service = new DataStorageService(mode, dataDirectory);
+        // The viewer can create an empty schema, but opens existing assistant results read-only.
+        if (!service.IsReadOnly || !File.Exists(service._dbPath)) await service.InitializeDatabaseAsync();
         return service;
     }
 
     private async Task InitializeDatabaseAsync()
     {
-        using var connection = new SqliteConnection(_connectionString);
+        string connectionString = IsReadOnly
+            ? new SqliteConnectionStringBuilder(_connectionString) { Mode = SqliteOpenMode.ReadWriteCreate }.ToString()
+            : _connectionString;
+        using var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync();
 
         var createTableCmd = connection.CreateCommand();
@@ -60,6 +75,7 @@ public class DataStorageService
 
     public async Task SaveAuditResultAsync(AuditResult result)
     {
+        EnsureWritable();
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
@@ -229,6 +245,7 @@ public class DataStorageService
 
     public async Task CleanupOldDataAsync(int retentionDays = 30)
     {
+        EnsureWritable();
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
@@ -241,6 +258,7 @@ public class DataStorageService
 
     public async Task VacuumDatabaseAsync()
     {
+        EnsureWritable();
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
@@ -290,6 +308,7 @@ public class DataStorageService
     public async Task<string?> UpdateOptimizedFindingsAsync(long id, string originalJson,
         IReadOnlyDictionary<int, AuditIssue> updates, string model, CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         if (updates.Count == 0 || JsonNode.Parse(originalJson) is not JsonArray stored) return null;
         foreach (var (index, finding) in updates)
         {
@@ -320,6 +339,7 @@ public class DataStorageService
 
     public async Task<bool> UpdateTranslatedFindingsAsync(long id, string originalJson, IReadOnlyList<AuditIssue> findings)
     {
+        EnsureWritable();
         if (!findings.Any(issue => issue.HasBilingualText)) return false;
         if (JsonNode.Parse(originalJson) is not JsonArray storedFindings
             || storedFindings.Count != findings.Count
@@ -350,5 +370,31 @@ public class DataStorageService
         command.Parameters.AddWithValue("@id", id);
         command.Parameters.AddWithValue("@original", originalJson);
         return await command.ExecuteNonQueryAsync() == 1;
+    }
+
+    private void EnsureWritable()
+    {
+        if (IsReadOnly)
+            throw new InvalidOperationException(AppText.Get("The assistant database is read-only in this app. Publish results using the AGENTS.md workflow."));
+    }
+
+    public async Task WatchForChangesAsync(Action changed, CancellationToken cancellationToken)
+    {
+        // data_version detects commits from another connection, including commits still in a WAL.
+        // It must be read on the same connection each time, without holding a read transaction.
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Pooling = false }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA data_version";
+        long version = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
+        changed();
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            long next = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
+            if (next == version) continue;
+            version = next;
+            changed();
+        }
     }
 }

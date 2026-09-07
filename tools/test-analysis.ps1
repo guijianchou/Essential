@@ -12,6 +12,8 @@ $privateFlags = [System.Reflection.BindingFlags]'NonPublic,Instance,Static'
 $settingsType = $assembly.GetType('LocalSecurityAudit.Services.SettingsService', $true)
 $settingsService = [System.Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($settingsType)
 $settings = [LocalSecurityAudit.Models.AppSettings]::new()
+$settings.Mode = 'extended'
+$settingsType.GetField('<ActiveMode>k__BackingField', $privateFlags).SetValue($settingsService, 'extended')
 $settings.DiagnosticLoggingEnabled = $false
 $settingsType.GetProperty('Current').SetValue($settingsService, $settings)
 $loggerType = $assembly.GetType('LocalSecurityAudit.Services.DiagnosticLogService', $true)

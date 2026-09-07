@@ -4,6 +4,7 @@ namespace LocalSecurityAudit.Models;
 
 public sealed class AppSettings
 {
+    public string Mode { get; set; } = AppMode.Assistant;
     public string Theme { get; set; } = "system";
     public string Language { get; set; } = "en";
     public bool MinimizeToTray { get; set; }

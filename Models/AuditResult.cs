@@ -13,10 +13,15 @@ public class AuditResult
     public Dictionary<string, JsonElement>? Metadata { get; set; }
 
     [JsonIgnore]
+    public bool HasIncompleteCoverage => Metadata?.TryGetValue("CoverageStatus", out var status) == true
+        && (status.ValueKind != JsonValueKind.String || status.GetString() != "complete");
+
+    [JsonIgnore]
     public bool HasAssessment
     {
         get
         {
+            if (HasIncompleteCoverage) return false;
             if (Findings.Count > 0) return true;
             if (Metadata == null) return false;
             string key = Metadata.ContainsKey("AnalyzedEventCount") ? "AnalyzedEventCount" : "EventCount";

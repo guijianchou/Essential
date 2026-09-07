@@ -29,11 +29,12 @@ public partial class SettingsViewModel
     private int eligibleOptimizationCount;
 
     partial void OnOptimizationModelChanged(string value) => _ = RefreshOptimizationPreviewAsync();
-    private bool CanOptimizeHistory() => !IsOptimizing && EligibleOptimizationCount > 0;
+    private bool CanOptimizeHistory() => IsExtendedMode && !IsOptimizing && EligibleOptimizationCount > 0;
 
     [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task RefreshOptimizationPreviewAsync()
     {
+        if (IsAssistantMode) return;
         int version = ++_optimizationPreviewVersion;
         string model = OptimizationModel;
         EligibleOptimizationCount = 0;
@@ -56,7 +57,7 @@ public partial class SettingsViewModel
     [RelayCommand(IncludeCancelCommand = true, CanExecute = nameof(CanOptimizeHistory))]
     private async Task OptimizeHistoryAsync(CancellationToken cancellationToken)
     {
-        if (IsOptimizing) return;
+        if (IsAssistantMode || IsOptimizing) return;
         IsOptimizing = true;
         ShowOptimizationProgress = true;
         OptimizationPercent = 0;

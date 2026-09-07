@@ -92,6 +92,8 @@ public sealed class AuditLoopbackEndpoint : IDisposable
 $settingsType = $assembly.GetType('LocalSecurityAudit.Services.SettingsService', $true)
 $settingsService = [System.Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($settingsType)
 $settings = [LocalSecurityAudit.Models.AppSettings]::new()
+$settings.Mode = 'extended'
+$settingsType.GetField('<ActiveMode>k__BackingField', $flags).SetValue($settingsService, 'extended')
 $settings.MaxConcurrentAnalysis = 1
 $settings.DiagnosticLoggingEnabled = $false
 $settingsType.GetProperty('Current').SetValue($settingsService, $settings)

@@ -28,7 +28,7 @@
         <Grid Grid.Row="0" Padding="32,18,32,4">
             <StackPanel Spacing="2">
                 <TextBlock Text="{Binding [Settings], Source={StaticResource AppText}}" Style="{StaticResource SubtitleTextStyle}" />
-                <TextBlock Text="{Binding [Changesapplytothenextauditafteryousave], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                <TextBlock Text="{Binding [SavechangestoapplythemModeswitchesrequireafullexitandreopen], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
             </StackPanel>
         </Grid>
 
@@ -41,10 +41,11 @@
                         AutomationProperties.Name="{Binding [Settingssections], Source={StaticResource AppText}}"
                         SelectionChanged="OnNavViewSelectionChanged">
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="{Binding [Appearance], Source={StaticResource AppText}}" Tag="appearance" IsSelected="True" />
-                <NavigationViewItem Content="{Binding [AIanalysis], Source={StaticResource AppText}}" Tag="ai" />
-                <NavigationViewItem Content="{Binding [Optimization], Source={StaticResource AppText}}" Tag="optimization" />
-                <NavigationViewItem Content="{Binding [Scanning], Source={StaticResource AppText}}" Tag="scanning" />
+                <NavigationViewItem Content="{Binding [Mode], Source={StaticResource AppText}}" Tag="mode" IsSelected="True" />
+                <NavigationViewItem Content="{Binding [Appearance], Source={StaticResource AppText}}" Tag="appearance" />
+                <NavigationViewItem Content="{Binding [AIanalysis], Source={StaticResource AppText}}" Tag="ai" IsEnabled="{x:Bind ViewModel.IsExtendedMode}" />
+                <NavigationViewItem Content="{Binding [Optimization], Source={StaticResource AppText}}" Tag="optimization" IsEnabled="{x:Bind ViewModel.IsExtendedMode}" />
+                <NavigationViewItem Content="{Binding [Scanning], Source={StaticResource AppText}}" Tag="scanning" IsEnabled="{x:Bind ViewModel.IsExtendedMode}" />
                 <NavigationViewItem Content="{Binding [Storage], Source={StaticResource AppText}}" Tag="storage" />
                 <NavigationViewItem Content="{Binding [About], Source={StaticResource AppText}}" Tag="about" />
             </NavigationView.MenuItems>
@@ -58,8 +59,59 @@
                              Closed="OnInfoBarClosed" />
 
                     <Grid>
+                        <StackPanel x:Name="ModePage" Spacing="12">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="{Binding [Startupmode], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
+                                    <TextBlock Text="{Binding [ModesuseindependentdatabasesYourAIHubconfigurationandextendedhistoryarepreserved], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <Button Content="{Binding [Save], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.SaveSettingsCommand}" />
+                                    <Button Content="{Binding [Saveandexit], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.SaveModeAndExitCommand}" Style="{StaticResource AccentButtonStyle}" />
+                                </StackPanel>
+                            </Grid>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="{Binding [Choosehowauditsareproduced], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [AssistantdefaultanordinarydisplaywindowClaudeorCodexcollectsanalyzesandpublishesresultsseparately], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        <TextBlock Text="{Binding [ExtendedadministratorapprovalthenWindowseventlogsconfiguredAIHubandlocalresults], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" Width="180" VerticalAlignment="Center" SelectedIndex="{x:Bind ViewModel.ModeIndex, Mode=TwoWay}"
+                                              AutomationProperties.Name="{Binding [Startupmode], Source={StaticResource AppText}}">
+                                        <ComboBoxItem Content="{Binding [Assistantmode], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Extendedmode], Source={StaticResource AppText}}" />
+                                    </ComboBox>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <StackPanel Spacing="8">
+                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                                        <TextBlock Text="{Binding [Currentlyrunning], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.ActiveModeText, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" />
+                                    </Grid>
+                                    <TextBlock Text="{Binding [AfterexitingopentheappnormallyfromFileExplorerExtendedmoderequestsUACAssistantmodecannotinheritadministratorelevation], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    <InfoBar IsOpen="{x:Bind ViewModel.IsModeChangePending, Mode=OneWay}" IsClosable="False" Severity="Warning"
+                                             Message="{Binding [ModesavedFullyexitandreopentheappnormallyfromFileExplorertoapplyit], Source={StaticResource AppText}}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="{Binding [Assistantworkflow], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                    <TextBlock Text="{Binding [TheappneverstartsClaudeorCodexCopythepromptintoyourownsessionFullorbypasspermissionsdonotgrantWindowsadministratorrights], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="{Binding [OpenAGENTSmd], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.OpenAssistantGuideCommand}" />
+                                        <Button Content="{Binding [Copyauditprompt], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.CopyAssistantPromptCommand}" />
+                                    </StackPanel>
+                                    <TextBlock Text="{x:Bind ViewModel.AssistantGuidePath}" Style="{StaticResource SettingDescriptionStyle}" IsTextSelectionEnabled="True" />
+                                    <TextBlock Text="{Binding [Assistantdatabase], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                    <TextBlock Text="{x:Bind ViewModel.AssistantDatabasePath}" Style="{StaticResource SettingDescriptionStyle}" IsTextSelectionEnabled="True" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
                         <!-- Appearance -->
-                        <StackPanel x:Name="AppearancePage" Spacing="12">
+                        <StackPanel x:Name="AppearancePage" Spacing="12" Visibility="Collapsed">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="{Binding [Appearance], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
@@ -380,12 +432,17 @@
                                     <TextBlock Text="{Binding [LocalaudithistoryNothingheretouchesthelivescanner], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <Button Content="{Binding [Cleanolddata], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.CleanupDataCommand}" />
-                                    <Button Content="{Binding [Optimizedatabase], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.VacuumDatabaseCommand}" />
+                                    <Button Content="{Binding [Refreshresults], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.UpdateDatabaseStatsCommand}" />
+                                    <Button Content="{Binding [Cleanolddata], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.CleanupDataCommand}" Visibility="{x:Bind ViewModel.IsExtendedMode, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                    <Button Content="{Binding [Optimizedatabase], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.VacuumDatabaseCommand}" Visibility="{x:Bind ViewModel.IsExtendedMode, Converter={StaticResource BoolToVisibilityConverter}}" />
                                     <Button Content="{Binding [Save], Source={StaticResource AppText}}" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveSettingsCommand}" AutomationProperties.Name="{Binding [Savestoragesettings], Source={StaticResource AppText}}" />
                                 </StackPanel>
                             </Grid>
-                            <Border Style="{StaticResource SettingsCardStyle}">
+                            <TextBlock Text="{x:Bind ViewModel.DatabasePath}" Style="{StaticResource SettingDescriptionStyle}" IsTextSelectionEnabled="True" />
+                            <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
+                                     Message="{Binding [TheassistantdatabaseisreadonlyinthisappPublishresultsusingtheAGENTSmdworkflow], Source={StaticResource AppText}}"
+                                     Visibility="{x:Bind ViewModel.IsAssistantMode, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            <Border Style="{StaticResource SettingsCardStyle}" Visibility="{x:Bind ViewModel.IsExtendedMode, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                                     <StackPanel Spacing="3">
                                         <TextBlock Text="{Binding [Retentionperiod], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
@@ -431,7 +488,7 @@
                             <Border Style="{StaticResource SettingsCardStyle}">
                                 <StackPanel Spacing="4">
                                     <TextBlock Text="{Binding [Dataandprivacy], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
-                                        <TextBlock Text="{Binding [AuditrecordsstayonthiscomputerScanssendeventsummarieshistoricaltranslationsendsexistinganalysistexttotheconfiguredendpoint], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        <TextBlock Text="{Binding [AssistantmodemakesnoAIrequestsYourchosenexternalagenthandlesitsowndatatransmissionExtendedmodesendseventsummariesandanalysistexttotheconfiguredAIHub], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>

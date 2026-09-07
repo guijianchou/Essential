@@ -59,12 +59,19 @@ public sealed partial class SettingsPage : Page
 
     private void ShowSection(string tag)
     {
+        if (ViewModel.IsAssistantMode && tag is "ai" or "optimization" or "scanning")
+        {
+            NavView.SelectedItem = NavView.MenuItems[0];
+            tag = "mode";
+        }
+        ModePage.Visibility = tag == "mode" ? Visibility.Visible : Visibility.Collapsed;
         AiPage.Visibility = tag == "ai" ? Visibility.Visible : Visibility.Collapsed;
         OptimizationPage.Visibility = tag == "optimization" ? Visibility.Visible : Visibility.Collapsed;
         if (tag == "optimization") _ = ViewModel.RefreshOptimizationPreviewCommand.ExecuteAsync(null);
         AppearancePage.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         ScanningPage.Visibility = tag == "scanning" ? Visibility.Visible : Visibility.Collapsed;
         StoragePage.Visibility = tag == "storage" ? Visibility.Visible : Visibility.Collapsed;
+        if (tag == "storage") _ = ViewModel.UpdateDatabaseStatsCommand.ExecuteAsync(null);
         AboutPage.Visibility = tag == "about" ? Visibility.Visible : Visibility.Collapsed;
     }
 
