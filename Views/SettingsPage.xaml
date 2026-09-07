@@ -155,35 +155,6 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- Audit policy -->
-                            <Border Style="{StaticResource SettingsCardStyle}" Padding="18,16">
-                                <StackPanel Spacing="10">
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                        <StackPanel Spacing="3">
-                                            <TextBlock Text="{Binding [Auditpolicy], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
-                                            <TextBlock Text="{Binding [PlaintextrulessenttoLunawitheverybatchevidencerulesseverityrubriccategorytaxonomyandtheJSONoutputcontractTheappneverexecutesthem], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top">
-                                            <TextBlock Text="{x:Bind ViewModel.PolicyStatusText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
-                                            <Button Content="{Binding [Resetpolicy], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.ResetAgentInstructionsCommand}" AutomationProperties.Name="{Binding [Resetauditpolicy], Source={StaticResource AppText}}" />
-                                        </StackPanel>
-                                    </Grid>
-                                    <TextBox Text="{x:Bind ViewModel.AgentInstructions, Mode=TwoWay}"
-                                             AcceptsReturn="True"
-                                             TextWrapping="Wrap"
-                                             MinHeight="240"
-                                             MaxHeight="420"
-                                             MaxLength="32000"
-                                             FontSize="13"
-                                             ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                             PlaceholderText="{Binding [Describeevidencerulesseverityguidanceandtheoutputcontract], Source={StaticResource AppText}}"
-                                             AutomationProperties.Name="{Binding [Auditpolicy], Source={StaticResource AppText}}" />
-                                    <TextBlock Style="{StaticResource CaptionTextStyle}" ToolTipService.ToolTip="{Binding [ThepolicyisalsosavedasthislocalAGENTSmdfile], Source={StaticResource AppText}}">
-                                        <Run Text="{Binding [Alsosavedas], Source={StaticResource AppText}}" /><Run Text="{x:Bind ViewModel.AgentInstructionsPath, Mode=OneWay}" />
-                                    </TextBlock>
-                                </StackPanel>
-                            </Border>
-
                             <!-- Endpoints -->
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" Margin="0,6,0,0">
                                 <StackPanel Spacing="2">
@@ -253,6 +224,35 @@
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
+
+                            <!-- Audit policy -->
+                            <Border Style="{StaticResource SettingsCardStyle}" Padding="18,16">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Text="{Binding [Auditpolicy], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                            <TextBlock Text="{Binding [PlaintextrulessenttoLunawitheverybatchevidencerulesseverityrubriccategorytaxonomyandtheJSONoutputcontractTheappneverexecutesthem], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top">
+                                            <TextBlock Text="{x:Bind ViewModel.PolicyStatusText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                                            <Button Content="{Binding [Resetpolicy], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.ResetAgentInstructionsCommand}" AutomationProperties.Name="{Binding [Resetauditpolicy], Source={StaticResource AppText}}" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBox Text="{x:Bind ViewModel.AgentInstructions, Mode=TwoWay}"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             MinHeight="240"
+                                             MaxHeight="420"
+                                             MaxLength="32000"
+                                             FontSize="13"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                             PlaceholderText="{Binding [Describeevidencerulesseverityguidanceandtheoutputcontract], Source={StaticResource AppText}}"
+                                             AutomationProperties.Name="{Binding [Auditpolicy], Source={StaticResource AppText}}" />
+                                    <TextBlock Style="{StaticResource CaptionTextStyle}" ToolTipService.ToolTip="{Binding [ThepolicyisalsosavedasthislocalAGENTSmdfile], Source={StaticResource AppText}}">
+                                        <Run Text="{Binding [Alsosavedas], Source={StaticResource AppText}}" /><Run Text="{x:Bind ViewModel.AgentInstructionsPath, Mode=OneWay}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
 
                         <!-- Scanning -->
