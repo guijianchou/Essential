@@ -10,7 +10,8 @@ public sealed class AppSettings
     public bool AutoScanEnabled { get; set; } = true;
     public int ScanIntervalHours { get; set; } = 4;
     public int FastScanRangeHours { get; set; } = 0;
-    public int RetentionDays { get; set; } = 7;
+    public int RetentionDays { get; set; } = 30;
+    public int RetentionPolicyVersion { get; set; }
     public bool HighSeverityNotification { get; set; } = true;
     public bool ScanCompleteNotification { get; set; }
     public bool DiagnosticLoggingEnabled { get; set; }

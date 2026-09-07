@@ -104,24 +104,16 @@ public class DataStorageService
             SELECT Timestamp, HealthScore, FindingsJson, MetadataJson
             FROM AuditResults
             WHERE Timestamp >= @start AND Timestamp < @end
-            ORDER BY Timestamp DESC
-            LIMIT 1
+            ORDER BY Timestamp DESC, Id DESC
         ";
         cmd.Parameters.AddWithValue("@start", utcStart);
         cmd.Parameters.AddWithValue("@end", utcEnd);
 
         using var reader = await cmd.ExecuteReaderAsync();
 
-        if (await reader.ReadAsync())
+        while (await reader.ReadAsync())
         {
-            return new AuditResult
-            {
-                Timestamp = AsUtc(reader.GetDateTime(0)),
-                HealthScore = reader.GetInt32(1),
-                Findings = JsonSerializer.Deserialize<List<AuditIssue>>(reader.GetString(2)) ?? new(),
-                Metadata = reader.IsDBNull(3) ? null :
-                    JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(reader.GetString(3))
-            };
+            if (ReadResult(reader) is { } result) return result;
         }
 
         return null;
@@ -136,28 +128,29 @@ public class DataStorageService
         cmd.CommandText = @"
             SELECT Timestamp, HealthScore, FindingsJson, MetadataJson
             FROM AuditResults
-            ORDER BY Timestamp DESC
-            LIMIT 1
+            ORDER BY Timestamp DESC, Id DESC
         ";
 
         using var reader = await cmd.ExecuteReaderAsync();
 
-        if (await reader.ReadAsync())
+        bool hasRows = false;
+        while (await reader.ReadAsync())
         {
-            return new AuditResult
-            {
-                Timestamp = AsUtc(reader.GetDateTime(0)),
-                HealthScore = reader.GetInt32(1),
-                Findings = JsonSerializer.Deserialize<List<AuditIssue>>(reader.GetString(2)) ?? new(),
-                Metadata = reader.IsDBNull(3) ? null :
-                    JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(reader.GetString(3))
-            };
+            hasRows = true;
+            if (ReadResult(reader) is { } result) return result;
         }
 
+        if (hasRows) throw new InvalidDataException(AppText.Get("No readable audit records were found."));
         return null;
     }
 
-    public async Task<List<AuditResult>> GetTrendsAsync(int days = 7)
+    public Task<List<AuditResult>> GetTrendsAsync(int days = 30)
+    {
+        var today = DateTime.Today;
+        return GetResultsAsync(today.AddDays(1 - Math.Max(1, days)).ToUniversalTime(), today.AddDays(1).ToUniversalTime());
+    }
+
+    public async Task<List<AuditResult>> GetResultsAsync(DateTime startUtc, DateTime endUtc)
     {
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
@@ -166,29 +159,48 @@ public class DataStorageService
         cmd.CommandText = @"
             SELECT Timestamp, HealthScore, FindingsJson, MetadataJson
             FROM AuditResults
-            WHERE Timestamp >= @cutoff
-            ORDER BY Timestamp ASC
+            WHERE Timestamp >= @start AND Timestamp < @end
+            ORDER BY Timestamp ASC, Id ASC
         ";
 
-        cmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.AddDays(-days));
+        cmd.Parameters.AddWithValue("@start", startUtc.ToUniversalTime());
+        cmd.Parameters.AddWithValue("@end", endUtc.ToUniversalTime());
 
         var results = new List<AuditResult>();
 
         using var reader = await cmd.ExecuteReaderAsync();
 
+        bool hasRows = false;
         while (await reader.ReadAsync())
         {
-            results.Add(new AuditResult
+            hasRows = true;
+            if (ReadResult(reader) is { } result) results.Add(result);
+        }
+
+        if (hasRows && results.Count == 0) throw new InvalidDataException(AppText.Get("No readable audit records were found."));
+        return results;
+    }
+
+    private static AuditResult? ReadResult(SqliteDataReader reader)
+    {
+        try
+        {
+            var findings = JsonSerializer.Deserialize<List<AuditIssue>>(reader.GetString(2));
+            if (findings == null || findings.Any(issue => issue == null)) return null;
+            return new AuditResult
             {
                 Timestamp = AsUtc(reader.GetDateTime(0)),
                 HealthScore = reader.GetInt32(1),
-                Findings = JsonSerializer.Deserialize<List<AuditIssue>>(reader.GetString(2)) ?? new(),
+                Findings = findings,
                 Metadata = reader.IsDBNull(3) ? null :
                     JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(reader.GetString(3))
-            });
+            };
         }
-
-        return results;
+        catch (Exception ex) when (ex is JsonException or FormatException or InvalidCastException or OverflowException)
+        {
+            // An unreadable row must not hide the remaining audit history.
+            return null;
+        }
     }
 
     private static DateTime AsUtc(DateTime timestamp)
@@ -196,14 +208,14 @@ public class DataStorageService
         return DateTime.SpecifyKind(timestamp, DateTimeKind.Utc);
     }
 
-    public async Task CleanupOldDataAsync(int retentionDays = 7)
+    public async Task CleanupOldDataAsync(int retentionDays = 30)
     {
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
         var cleanupCmd = connection.CreateCommand();
         cleanupCmd.CommandText = "DELETE FROM AuditResults WHERE Timestamp < @cutoff";
-        cleanupCmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.AddDays(-Math.Max(1, retentionDays)));
+        cleanupCmd.Parameters.AddWithValue("@cutoff", DateTime.Today.AddDays(1 - Math.Max(1, retentionDays)).ToUniversalTime());
 
         await cleanupCmd.ExecuteNonQueryAsync();
     }
@@ -240,7 +252,10 @@ public class DataStorageService
         while (await reader.ReadAsync())
         {
             string json = reader.GetString(1);
-            var findings = JsonSerializer.Deserialize<List<AuditIssue>>(json) ?? new();
+            List<AuditIssue>? findings;
+            try { findings = JsonSerializer.Deserialize<List<AuditIssue>>(json); }
+            catch (JsonException) { continue; }
+            if (findings == null || findings.Any(issue => issue == null)) continue;
             if (findings.Any(issue => !issue.HasBilingualText))
                 results.Add((reader.GetInt64(0), json, findings));
         }

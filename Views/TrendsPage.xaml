@@ -2,27 +2,33 @@
     x:Class="LocalSecurityAudit.Views.TrendsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LocalSecurityAudit.ViewModels"
     xmlns:lvc="using:LiveChartsCore.SkiaSharpView.WinUI"
     Background="Transparent">
     <Grid Background="Transparent" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" Padding="32,18,32,8" ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="2" VerticalAlignment="Center">
                 <TextBlock Text="{Binding [Trends], Source={StaticResource AppText}}" Style="{StaticResource SubtitleTextStyle}" />
-                <TextBlock Text="{Binding [Past7daysusingthelatestscanofeachday], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                <Grid MinHeight="16">
+                    <TextBlock Text="{x:Bind ViewModel.PeriodText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap"
+                               Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
+                    <TextBlock Text="{Binding [Loadingtrenddata], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}"
+                               Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                </Grid>
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                <ProgressRing Width="16"
-                              Height="16"
-                              IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
-                              Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                              AutomationProperties.Name="{Binding [Loadingtrenddata], Source={StaticResource AppText}}" />
-                <Button Height="32" Padding="12,0" Command="{x:Bind ViewModel.LoadDataCommand}" AutomationProperties.Name="{Binding [Refreshtrenddata], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Reloadtheaudithistory], Source={StaticResource AppText}}">
-                    <StackPanel Orientation="Horizontal" Spacing="7">
-                        <FontIcon Glyph="&#xE72C;" FontSize="12" />
-                        <TextBlock Text="{Binding [Refresh], Source={StaticResource AppText}}" FontSize="13" />
-                    </StackPanel>
-                </Button>
-            </StackPanel>
+            <Border Grid.Column="1" Padding="3" CornerRadius="6" Background="{ThemeResource ControlFillColorTertiaryBrush}" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="2">
+                    <ToggleButton Content="1D" Tag="1" Width="48" Height="30" Padding="0" CornerRadius="4" BorderThickness="0"
+                                  IsChecked="{x:Bind ViewModel.IsOneDay, Mode=OneWay}" Click="OnWindowClick"
+                                  AutomationProperties.Name="{Binding [Today], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Today], Source={StaticResource AppText}}" />
+                    <ToggleButton Content="7D" Tag="7" Width="48" Height="30" Padding="0" CornerRadius="4" BorderThickness="0"
+                                  IsChecked="{x:Bind ViewModel.IsSevenDays, Mode=OneWay}" Click="OnWindowClick"
+                                  AutomationProperties.Name="{Binding [7days], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [7days], Source={StaticResource AppText}}" />
+                    <ToggleButton Content="30D" Tag="30" Width="48" Height="30" Padding="0" CornerRadius="4" BorderThickness="0"
+                                  IsChecked="{x:Bind ViewModel.IsThirtyDays, Mode=OneWay}" Click="OnWindowClick"
+                                  AutomationProperties.Name="{Binding [30days], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [30days], Source={StaticResource AppText}}" />
+                </StackPanel>
+            </Border>
         </Grid>
 
         <ScrollViewer Grid.Row="1"
@@ -42,21 +48,21 @@
                         <StackPanel Spacing="6">
                             <TextBlock Text="{Binding [Scans], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
                             <TextBlock Text="{x:Bind ViewModel.ScansText, Mode=OneWay}" Style="{StaticResource StatValueStyle}" />
-                            <TextBlock Text="{x:Bind ViewModel.ScansDetailText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
+                            <TextBlock Text="{x:Bind ViewModel.ScansDetailText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="1" Style="{StaticResource TileStyle}" AutomationProperties.Name="{Binding [Averagehealth], Source={StaticResource AppText}}">
                         <StackPanel Spacing="6">
                             <TextBlock Text="{Binding [Averagehealth], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
                             <TextBlock Text="{x:Bind ViewModel.AverageHealthText, Mode=OneWay}" Style="{StaticResource StatValueStyle}" />
-                            <TextBlock Text="{x:Bind ViewModel.AverageHealthDetailText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
+                            <TextBlock Text="{x:Bind ViewModel.AverageHealthDetailText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
-                    <Border Grid.Column="2" Style="{StaticResource TileStyle}" AutomationProperties.Name="{Binding [Findingsperscan], Source={StaticResource AppText}}">
+                    <Border Grid.Column="2" Style="{StaticResource TileStyle}" AutomationProperties.Name="{Binding [Findingreports], Source={StaticResource AppText}}">
                         <StackPanel Spacing="6">
-                            <TextBlock Text="{Binding [Findingsperscan], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
-                            <TextBlock Text="{x:Bind ViewModel.FindingsPerScanText, Mode=OneWay}" Style="{StaticResource StatValueStyle}" />
-                            <TextBlock Text="{x:Bind ViewModel.FindingsPerScanDetailText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
+                            <TextBlock Text="{Binding [Findingreports], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                            <TextBlock Text="{x:Bind ViewModel.FindingCountText, Mode=OneWay}" Style="{StaticResource StatValueStyle}" />
+                            <TextBlock Text="{x:Bind ViewModel.FindingCountDetailText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="3" Style="{StaticResource TileStyle}" AutomationProperties.Name="{Binding [Trend], Source={StaticResource AppText}}">
@@ -64,20 +70,21 @@
                             <TextBlock Text="{Binding [Trend], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
                             <StackPanel Orientation="Horizontal" Spacing="10" Height="34">
                                 <Ellipse x:Name="TrendDot" Width="10" Height="10" VerticalAlignment="Center" />
-                                <TextBlock Text="{x:Bind ViewModel.TrendStatus, Mode=OneWay}" Style="{StaticResource SubtitleTextStyle}" VerticalAlignment="Center" />
+                                <TextBlock Text="{x:Bind ViewModel.TrendStatus, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" VerticalAlignment="Center" />
                             </StackPanel>
                             <TextBlock Text="{x:Bind ViewModel.TrendDetailText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
                 </Grid>
 
-                <!-- Findings by day and health by day -->
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
-                    <Border Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Findingsbyday], Source={StaticResource AppText}}">
+                <TextBlock Text="{Binding [Reportsfromallscansrepeateddetectionsarecountedperscan], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+
+                <StackPanel Spacing="20">
+                    <Border BorderThickness="0,1,0,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" Padding="0,18,0,0">
                         <StackPanel Spacing="12">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                 <StackPanel Spacing="2">
-                                    <TextBlock Text="{Binding [Findingsbyday], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                    <TextBlock Text="{x:Bind ViewModel.FindingsChartTitle, Mode=OneWay}" Style="{StaticResource CaptionStrongTextStyle}" />
                                     <TextBlock Text="{Binding [Stackedbyseverity], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
@@ -95,38 +102,91 @@
                                     </StackPanel>
                                 </StackPanel>
                             </Grid>
-                            <lvc:CartesianChart x:Name="FindingsChart" Height="230" AutomationProperties.Name="{Binding [Findingsbydaychart], Source={StaticResource AppText}}" />
+                            <lvc:CartesianChart x:Name="FindingsChart" Height="230" AutomationProperties.Name="{x:Bind ViewModel.FindingsChartTitle, Mode=OneWay}" />
                         </StackPanel>
                     </Border>
 
-                    <Border Grid.Column="1" Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Healthscorebyday], Source={StaticResource AppText}}">
+                    <Border BorderThickness="0,1,0,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" Padding="0,18,0,0">
                         <StackPanel Spacing="12">
                             <StackPanel Spacing="2">
-                                <TextBlock Text="{Binding [Healthscorebyday], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.HealthChartTitle, Mode=OneWay}" Style="{StaticResource CaptionStrongTextStyle}" />
                                 <TextBlock Text="{Binding [0to100higherisbetter], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
                             </StackPanel>
-                            <lvc:CartesianChart x:Name="HealthChart" Height="230" AutomationProperties.Name="{Binding [Healthscorebydaychart], Source={StaticResource AppText}}" />
+                            <lvc:CartesianChart x:Name="HealthChart" Height="180" AutomationProperties.Name="{x:Bind ViewModel.HealthChartTitle, Mode=OneWay}" />
                         </StackPanel>
                     </Border>
-                </Grid>
+                </StackPanel>
 
                 <!-- Findings by category -->
-                <Border Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Findingsbycategory], Source={StaticResource AppText}}">
+                <Border BorderThickness="0,1,0,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" Padding="0,18,0,0" AutomationProperties.Name="{Binding [Findingsbycategory], Source={StaticResource AppText}}">
                     <StackPanel Spacing="12">
                         <StackPanel Spacing="2">
                             <TextBlock Text="{Binding [Findingsbycategory], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
-                            <TextBlock Text="{Binding [Acrossthedaysshownabove], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
                         </StackPanel>
                         <lvc:CartesianChart x:Name="CategoryChart"
                                             Height="{x:Bind ViewModel.CategoryChartHeight, Mode=OneWay}"
                                             Visibility="{x:Bind ViewModel.HasData, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                                             AutomationProperties.Name="{Binding [Findingsbycategorychart], Source={StaticResource AppText}}" />
-                        <TextBlock Text="{Binding [Noscansinthepast7daysRunascanfromthedashboardtostartthehistory], Source={StaticResource AppText}}"
+                        <TextBlock Text="{Binding [Noscansinthisperiod], Source={StaticResource AppText}}"
                                    Style="{StaticResource CaptionTextStyle}"
                                    Padding="0,12"
                                    Visibility="{x:Bind ViewModel.HasData, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
                     </StackPanel>
                 </Border>
+
+                <StackPanel Spacing="12">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                        <StackPanel Spacing="3" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding [Findingreports], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" />
+                            <TextBlock Text="{x:Bind ViewModel.PageText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" Width="148" SelectedIndex="{x:Bind ViewModel.SeverityFilterIndex, Mode=TwoWay}"
+                                  AutomationProperties.Name="{Binding [Severity], Source={StaticResource AppText}}">
+                            <ComboBoxItem Content="{Binding [All], Source={StaticResource AppText}}" />
+                            <ComboBoxItem Content="{Binding [High], Source={StaticResource AppText}}" />
+                            <ComboBoxItem Content="{Binding [Medium], Source={StaticResource AppText}}" />
+                            <ComboBoxItem Content="{Binding [Low], Source={StaticResource AppText}}" />
+                        </ComboBox>
+                    </Grid>
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.VisibleFindings, Mode=OneWay}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:HistoryFinding">
+                                <Button Tag="{x:Bind Issue}" Click="OnFindingClick" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                        Background="Transparent" BorderThickness="0,0,0,1" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                        CornerRadius="0" Padding="8,12" AutomationProperties.Name="{x:Bind Issue.DisplayTitle}"
+                                        ToolTipService.ToolTip="{Binding [Openfindingdetails], Source={StaticResource AppText}}">
+                                    <Grid ColumnDefinitions="4,*,Auto" ColumnSpacing="12">
+                                        <Border Background="{ThemeResource SeverityHighFillBrush}" CornerRadius="2" Visibility="{x:Bind Issue.IsHigh, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                        <Border Background="{ThemeResource SeverityMediumFillBrush}" CornerRadius="2" Visibility="{x:Bind Issue.IsMedium, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                        <Border Background="{ThemeResource SeverityLowFillBrush}" CornerRadius="2" Visibility="{x:Bind Issue.IsLow, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                                <TextBlock Style="{StaticResource CaptionTextStyle}"><Run Text="{x:Bind Issue.SeverityText}" /><Run Text=" / " /><Run Text="{x:Bind Issue.CategoryLabel}" /></TextBlock>
+                                                <TextBlock Grid.Column="1" Text="{x:Bind ScanText}" Style="{StaticResource CaptionTextStyle}" />
+                                            </Grid>
+                                            <TextBlock Text="{x:Bind Issue.DisplayTitle}" Style="{StaticResource BodyStrongTextStyle}" TextWrapping="Wrap" MaxLines="2" />
+                                            <TextBlock Text="{x:Bind Issue.PriorityActionText}" Style="{StaticResource CaptionTextStyle}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{x:Bind Issue.EvidenceSummaryText}" Style="{StaticResource CaptionTextStyle}" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <FontIcon Grid.Column="2" Glyph="&#xE76C;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </Grid>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{Binding [Nomatchingfindingreportsinthisperiod], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" Padding="0,12"
+                               Visibility="{x:Bind ViewModel.HasFindings, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                        <Button Width="32" Height="32" Padding="0" Command="{x:Bind ViewModel.PreviousPageCommand}" IsEnabled="{x:Bind ViewModel.CanGoBack, Mode=OneWay}"
+                                AutomationProperties.Name="{Binding [Previouspage], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Previouspage], Source={StaticResource AppText}}">
+                            <FontIcon Glyph="&#xE72B;" FontSize="12" />
+                        </Button>
+                        <Button Width="32" Height="32" Padding="0" Command="{x:Bind ViewModel.NextPageCommand}" IsEnabled="{x:Bind ViewModel.CanGoForward, Mode=OneWay}"
+                                AutomationProperties.Name="{Binding [Nextpage], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Nextpage], Source={StaticResource AppText}}">
+                            <FontIcon Glyph="&#xE72A;" FontSize="12" />
+                        </Button>
+                    </StackPanel>
+                </StackPanel>
             </StackPanel>
         </ScrollViewer>
     </Grid>

@@ -406,6 +406,7 @@ public sealed class SettingsService
 
             if (_policyUpgraded
                 || stored == null
+                || stored.RetentionPolicyVersion != Current.RetentionPolicyVersion
                 || string.IsNullOrWhiteSpace(stored.AgentInstructions)
                 || stored.AiTargets == null
                 || stored.AiTargets.Count == 0
@@ -590,10 +591,15 @@ public sealed class SettingsService
             1 or 2 or 4 => settings.FastScanRangeHours,
             _ => 0
         };
+        if (settings.RetentionPolicyVersion < 1)
+        {
+            if (settings.RetentionDays == 7) settings.RetentionDays = 30;
+            settings.RetentionPolicyVersion = 1;
+        }
         settings.RetentionDays = settings.RetentionDays switch
         {
             3 or 7 or 14 or 30 => settings.RetentionDays,
-            _ => 7
+            _ => 30
         };
         settings.AgentInstructions = string.IsNullOrWhiteSpace(settings.AgentInstructions)
             ? DefaultAgentInstructions

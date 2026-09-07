@@ -83,6 +83,8 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private readonly List<AuditIssueEnhanced> _allIssues = new();
     private bool _isRunningScan;
     private AuditResult? _displayedResult;
+    private int _loadVersion;
+    private bool _isLoadingData;
 
     [ObservableProperty]
     private List<AuditIssueEnhanced> priorityFindings = new();
@@ -231,19 +233,15 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
 
     private void OnAuditFailed(object? sender, AuditFailedEventArgs e)
     {
-        EnqueueOnUi(() =>
-        {
-            IsLoading = false;
-        });
+        EnqueueOnUi(UpdateLoadingState);
     }
 
     private void OnAuditProgress(object? sender, AuditProgressEventArgs e)
     {
-        EnqueueOnUi(() =>
-        {
-            IsLoading = _isRunningScan || _schedulerService.IsScanning;
-        });
+        EnqueueOnUi(UpdateLoadingState);
     }
+
+    private void UpdateLoadingState() => IsLoading = _isLoadingData || _isRunningScan || _schedulerService.IsScanning;
 
     [RelayCommand]
     private void SetSeverityFilter(string? filter)
@@ -262,7 +260,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         RebuildSections();
     }
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task LoadDataAsync()
     {
         if (_dispatcherQueue is { HasThreadAccess: false })
@@ -271,21 +269,15 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (IsLoading && !_isRunningScan)
-        {
-            return;
-        }
-
-        IsLoading = true;
-        if (!_isRunningScan)
-        {
-            ShowStatus(InfoBarSeverity.Informational, AppText.Get("Loading the latest audit..."));
-        }
+        int version = ++_loadVersion;
+        _isLoadingData = true;
+        UpdateLoadingState();
 
         try
         {
-            var result = await _storageService.GetLatestResultAsync();
-            int scanCount = await _storageService.GetAuditRecordCountAsync();
+            var (result, scanCount) = await Task.Run(async () =>
+                (await _storageService.GetLatestResultAsync(), await _storageService.GetAuditRecordCountAsync()));
+            if (version != _loadVersion) return;
             ScanCountText = scanCount.ToString("N0", AppText.Culture);
 
             if (result == null)
@@ -307,13 +299,17 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            ShowStatus(InfoBarSeverity.Error, AppText.Format("Load failed: {0}", ex.Message));
+            if (version == _loadVersion)
+                ShowStatus(InfoBarSeverity.Warning, _displayedResult == null
+                    ? AppText.Format("Load failed: {0}", ex.Message)
+                    : AppText.Get("The latest audit could not be loaded. Showing the last available result."));
         }
         finally
         {
-            if (!_isRunningScan)
+            if (version == _loadVersion)
             {
-                IsLoading = false;
+                _isLoadingData = false;
+                UpdateLoadingState();
             }
         }
     }
@@ -352,7 +348,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         finally
         {
             _isRunningScan = false;
-            IsLoading = false;
+            UpdateLoadingState();
         }
     }
 

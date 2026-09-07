@@ -5,6 +5,7 @@ using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using LiveChartsCore;
 using LiveChartsCore.Drawing;
 using LiveChartsCore.Measure;
@@ -12,6 +13,7 @@ using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
 using LiveChartsCore.SkiaSharpView.WinUI;
 using LocalSecurityAudit.Helpers;
+using LocalSecurityAudit.Models;
 using LocalSecurityAudit.Services;
 using LocalSecurityAudit.ViewModels;
 
@@ -19,6 +21,7 @@ namespace LocalSecurityAudit.Views;
 
 public sealed partial class TrendsPage : Page
 {
+    private bool _isFindingDialogOpen;
     public TrendsViewModel ViewModel { get; }
 
     public TrendsPage()
@@ -54,10 +57,10 @@ public sealed partial class TrendsPage : Page
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(TrendsViewModel.TrendDays)
-            or nameof(TrendsViewModel.CategoryTotals))
+        if (e.PropertyName == nameof(TrendsViewModel.TrendDays))
         {
             ConfigureCharts();
+            ApplyTrendDot();
         }
         else if (e.PropertyName == nameof(TrendsViewModel.TrendBand))
         {
@@ -89,7 +92,7 @@ public sealed partial class TrendsPage : Page
         var days = ViewModel.TrendDays;
         var labels = days.Select(day => day.Label).ToList();
 
-        // Findings by day: one stacked column per day, most severe at the baseline.
+        // Every bucket uses the same reports as the summary and history list.
         var high = days.Select(day => (double)day.High).ToArray();
         var medium = days.Select(day => (double)day.Medium).ToArray();
         var low = days.Select(day => (double)day.Low).ToArray();
@@ -106,7 +109,7 @@ public sealed partial class TrendsPage : Page
         FindingsChart.YAxes = new[] { ValueAxis(findingsMax, findingsStep, palette) };
         ApplyChartChrome(FindingsChart, palette);
 
-        // Health by day: a single line with gaps on days without a scan.
+        // Unassessed intervals remain gaps, including scans with no analyzed events.
         var health = days.Select(day => day.HasData ? (double?)day.Health : null).ToArray();
         HealthChart.Series = new ISeries[]
         {
@@ -202,7 +205,7 @@ public sealed partial class TrendsPage : Page
             SeparatorsPaint = null,
             TicksPaint = null,
             LabelsRotation = 0,
-            MinStep = 1,
+            MinStep = labels.Count > 7 ? Math.Ceiling(labels.Count / 6d) : 1,
             ForceStepToMin = true,
             // Keep every day visible even when a series has gaps.
             MinLimit = -0.5,
@@ -261,5 +264,32 @@ public sealed partial class TrendsPage : Page
     private void OnStatusBarClosed(InfoBar sender, object args)
     {
         ViewModel.IsStatusVisible = false;
+    }
+
+    private void OnWindowClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton button && button.Tag is string days)
+        {
+            ViewModel.SetWindowCommand.Execute(days);
+            button.IsChecked = true;
+        }
+    }
+
+    private async void OnFindingClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: AuditIssueEnhanced issue } || XamlRoot == null || _isFindingDialogOpen) return;
+        _isFindingDialogOpen = true;
+        try
+        {
+            await new FindingDetailsDialog(issue, XamlRoot, ActualTheme).ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            App.GetService<DiagnosticLogService>().WriteException("Finding details could not be opened", ex);
+            ViewModel.StatusSeverity = InfoBarSeverity.Error;
+            ViewModel.StatusMessage = AppText.Get("Finding details could not be opened. Check the diagnostic log.");
+            ViewModel.IsStatusVisible = true;
+        }
+        finally { _isFindingDialogOpen = false; }
     }
 }

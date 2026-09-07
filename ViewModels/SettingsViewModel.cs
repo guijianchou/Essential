@@ -490,7 +490,7 @@ public partial class SettingsViewModel : ObservableObject
             7 => 1,
             14 => 2,
             30 => 3,
-            _ => 1
+            _ => 3
         };
         HighSeverityNotification = settings.HighSeverityNotification;
         ScanCompleteNotification = settings.ScanCompleteNotification;
@@ -561,6 +561,7 @@ public partial class SettingsViewModel : ObservableObject
                 _ => 0
             },
             RetentionDays = GetRetentionDays(),
+            RetentionPolicyVersion = _settingsService.Current.RetentionPolicyVersion,
             HighSeverityNotification = HighSeverityNotification,
             ScanCompleteNotification = ScanCompleteNotification,
             DiagnosticLoggingEnabled = DiagnosticLoggingEnabled,
@@ -586,9 +587,9 @@ public partial class SettingsViewModel : ObservableObject
         return RetentionDaysIndex switch
         {
             0 => 3,
+            1 => 7,
             2 => 14,
-            3 => 30,
-            _ => 7
+            _ => 30
         };
     }
 
