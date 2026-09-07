@@ -473,8 +473,14 @@
   "Analysis model": "分析模型",
   "Optimized from {0} on {1}": "原模型：{0}，优化时间：{1}",
   "Recent seven days": "最近七天",
-  "{0:d}: {1} scans": "{0:d}：{1} 次扫描",
+  "{0:D}: {1} scans": "{0:D}：{1} 次扫描",
   "Audit on {0:d}": "{0:d} 的最近审计",
   "No audit on this day": "当天无审计",
-  "No audit on {0:d}": "{0:d} 无审计记录"
+  "No audit on {0:d}": "{0:d} 无审计记录",
+  "Audit details": "审计详情",
+  "Choose another day to view a saved audit.": "请选择其他日期查看已保存的审计。",
+  "No findings in this audit": "本次审计未发现问题",
+  "No matching findings": "没有符合筛选条件的问题",
+  "Choose another source or severity filter.": "请选择其他日志来源或严重程度。",
+  "Scan recent events using the configured time range.": "按设置的时间范围扫描近期事件。"
 }

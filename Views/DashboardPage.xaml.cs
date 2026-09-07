@@ -56,7 +56,10 @@ public sealed partial class DashboardPage : Page
         }
         else if (e.PropertyName == nameof(DashboardViewModel.IsDateLoading))
         {
-            ContentMotion.SetLoading(DashboardContent, ViewModel.IsDateLoading);
+            // Keep date navigation available while only the result panels transition.
+            ContentMotion.SetLoading(HealthScoreContent, ViewModel.IsDateLoading);
+            ContentMotion.SetLoading(AuditDetailsContent, ViewModel.IsDateLoading);
+            ContentMotion.SetLoading(FindingsContent, ViewModel.IsDateLoading);
         }
     }
 
