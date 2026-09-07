@@ -422,7 +422,7 @@ public partial class SettingsViewModel : ObservableObject
             2 => AppText.Get("the past 4 hours"),
             _ => AppText.Get("everything since the last scan")
         };
-        PipelineCollectText = AppText.Format("Security, System, Application and Firewall logs. Fast scans cover {0}; full scans cover 24 hours.", window);
+        PipelineCollectText = AppText.Format("Security, System, Application and Setup logs, including Critical events and firewall audits from Security. Fast scans cover {0}; full scans cover 24 hours.", window);
 
         string parallel = settings.MaxConcurrentAnalysis > 1
             ? AppText.Format("up to {0} requests in parallel", settings.MaxConcurrentAnalysis)

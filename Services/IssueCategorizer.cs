@@ -104,12 +104,12 @@ public static class IssueCategorizer
     public static AuditIssueEnhanced CategorizeIssue(AuditIssue issue)
     {
         var category = ParseCategory(issue.Category);
-        if (category == IssueCategory.Unknown
-            && int.TryParse(issue.EventId, out int eventId)
-            && EventIdMap.TryGetValue(eventId, out var mapping))
+        if (int.TryParse(issue.EventId, out int eventId)
+            && TryGetEventClassification(eventId, issue.LogName, issue.Source, out var mappedCategory, out _, out _))
         {
-            category = mapping.Category;
+            category = mappedCategory;
         }
+        else if (string.Equals(issue.LogName, "Setup", StringComparison.OrdinalIgnoreCase)) category = IssueCategory.Configuration;
 
         return new AuditIssueEnhanced
         {
@@ -144,11 +144,42 @@ public static class IssueCategorizer
 
     public static bool TryGetEventClassification(
         int eventId,
+        string? logName,
+        string? provider,
         out IssueCategory category,
         out IssueSeverity severity,
         out string title)
     {
-        if (EventIdMap.TryGetValue(eventId, out var mapping))
+        category = IssueCategory.Unknown;
+        severity = IssueSeverity.Medium;
+        title = string.Empty;
+        string log = logName?.ToLowerInvariant() ?? string.Empty;
+        if (log == "setup")
+        {
+            category = IssueCategory.Configuration;
+            return true;
+        }
+        if (log == "system" && eventId == 1001
+            && (string.Equals(provider, "Microsoft-Windows-WER-SystemErrorReporting", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(provider, "BugCheck", StringComparison.OrdinalIgnoreCase)))
+        {
+            category = IssueCategory.Stability;
+            title = "Windows restarted after a bugcheck";
+            return true;
+        }
+
+        // Event IDs belong to a log/provider namespace, not a machine-wide taxonomy.
+        bool matchesLog = log switch
+        {
+            "system" => eventId is 7000 or 7001 or 7022 or 7023 or 7024 or 7026 or 7031 or 7034 or 7036 or 7040 or 7045
+                || (eventId == 41 && string.Equals(provider, "Microsoft-Windows-Kernel-Power", StringComparison.OrdinalIgnoreCase))
+                || (eventId == 6008 && string.Equals(provider, "EventLog", StringComparison.OrdinalIgnoreCase)),
+            "application" => eventId is 1000 or 1001 or 1002,
+            "security" => eventId is 1102 or 1104 or 1108 || eventId is >= 4600 and <= 5999,
+            "" => true,
+            _ => false
+        };
+        if (matchesLog && EventIdMap.TryGetValue(eventId, out var mapping))
         {
             category = mapping.Category;
             severity = mapping.Severity;
@@ -156,9 +187,6 @@ public static class IssueCategorizer
             return true;
         }
 
-        category = IssueCategory.Unknown;
-        severity = IssueSeverity.Medium;
-        title = string.Empty;
         return false;
     }
 

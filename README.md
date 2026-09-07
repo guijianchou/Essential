@@ -1,6 +1,6 @@
 # 本地安全审计系统 (LocalSecurityAudit)
 
-版本: 0.3.0
+版本: 0.3.1
 
 ## 项目概述
 
@@ -9,10 +9,11 @@
 ## 主要功能
 
 - **自动审计**: 每 4 小时自动执行一次安全审计
-- **日志分析**: 读取 Windows Security、System、Application 和 Firewall 日志
+- **日志分析**: 读取 Windows Security、System、Application 和 Setup 日志，防火墙审计从 Security 读取
 - **AI 驱动分析**: 使用 Luna 模型识别异常登录、权限提升、防火墙异常等安全问题
 - **数据可视化**: 
   - 健康评分仪表盘
+  - 总览以及 Application / Security / Setup / System 来源标签，联动问题数量和严重程度筛选
   - 问题严重程度分布饼图
   - 1D / 7D / 30D 趋势、区间汇总和可点击的问题历史
 - **自动加载**: 展示最新可用审计，跳过损坏记录；扫描完成和历史补译后自动更新
@@ -126,17 +127,18 @@ https://api.falsemeet.site
 
 ### 审计流程
 
-1. **日志收集**: 读取过去 4 小时的关键事件
-   - Security: 4624(成功登录), 4625(失败登录), 4648(显式凭据), 4672(特权分配), 4720(创建账户), 4732(添加到组)
-   - System: 所有 Error 和 Warning 级别事件
-   - Application: 所有 Error 和 Warning 级别事件
-   - Firewall: 5152(阻止数据包), 5157(阻止连接)
+1. **日志收集**: Full scan 固定覆盖过去 24 小时；Fast scan 按配置的小时范围或上次扫描结束时间增量读取
+   - Security: 登录、账户与组、权限、策略和审计日志变更事件
+   - System / Application / Setup: Critical、Error 和 Warning 级别事件，包含 Kernel-Power 41
+   - Firewall: 从 Security 读取 5152、5157、4946-4950 等防火墙和 Windows Filtering Platform 审计事件
 
 2. **AI 分析**: 将事件批量发送给 Luna 模型（每批 30 个事件）
 
 3. **结果存储**: 保存到本地 SQLite 数据库
 
 4. **自动清理**: 按设置的保留期清理，默认保留最近 30 个本地自然日
+
+侧栏百分比依据已完成的读取分组、分析批次及流程阶段计算，不代表预计耗时。等待模型生成时显示请求耗时和输出信息；展开或收起侧栏均可查看阶段完成度。
 
 ## 数据存储
 

@@ -429,5 +429,15 @@
   "{0}-{1} of {2} reports": "第 {0}-{1} 条，共 {2} 条报告",
   "Severity": "严重程度",
   "Previous page": "上一页",
-  "Next page": "下一页"
+  "Next page": "下一页",
+  "Overview {0}": "总览 {0}",
+  "Security": "安全",
+  "Setup": "安装",
+  "No findings from {0}": "{0}日志中没有问题",
+  "{0:0}%": "{0:0}%",
+  "{0}/{1} groups": "{0}/{1} 组",
+  "{0}/{1} stages": "{0}/{1} 阶段",
+  "Stage completion": "阶段完成度",
+  "Reading {0}; {1:N0} events collected": "读取 {0}；已收集 {1:N0} 条事件",
+  "Security, System, Application and Setup logs, including Critical events and firewall audits from Security. Fast scans cover {0}; full scans cover 24 hours.": "读取安全、系统、应用程序和安装日志，包含关键级别事件及 Security 中的防火墙审计。快速扫描覆盖{0}；完整扫描覆盖 24 小时。"
 }

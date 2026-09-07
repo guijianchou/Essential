@@ -39,6 +39,9 @@ public sealed class AuditProgressEventArgs : EventArgs
     public int CompletedBatches { get; init; }
     public int TotalBatches { get; init; }
     public int BatchNumber { get; init; }
+    public int CompletedUnits { get; init; }
+    public int TotalUnits { get; init; }
+    public bool StartsScan { get; init; }
 
     public AuditProgressEventArgs(AuditStage stage, AuditStepState state, string message, params object?[] arguments)
     {

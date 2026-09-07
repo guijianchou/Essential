@@ -50,9 +50,24 @@
             <NavigationView.PaneFooter>
                 <Grid x:Name="WorkflowHost" RowDefinitions="Auto,*,Auto" Padding="0,12,0,8"
                       Visibility="{Binding IsWorkflowVisible, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <TextBlock x:Name="WorkflowHeading" Text="{x:Bind ViewModel.WorkflowTitle, Mode=OneWay}" Margin="20,0,16,14"
-                               FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"
-                               Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <Grid>
+                        <StackPanel x:Name="WorkflowHeading" Margin="20,0,16,14" Spacing="6"
+                                    Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <TextBlock Text="{x:Bind ViewModel.WorkflowTitle, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.WorkflowPercentText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" />
+                            </Grid>
+                            <ProgressBar Value="{x:Bind ViewModel.WorkflowPercent, Mode=OneWay}" Minimum="0" Maximum="100" Height="4"
+                                         AutomationProperties.Name="{x:Bind ViewModel.WorkflowProgressLabel, Mode=OneWay}" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <TextBlock Text="{x:Bind ViewModel.WorkflowProgressLabel, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.WorkflowCountText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Grid>
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind ViewModel.WorkflowPercentText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,14" HorizontalAlignment="Center"
+                                   ToolTipService.ToolTip="{x:Bind ViewModel.WorkflowProgressLabel, Mode=OneWay}"
+                                   Visibility="{Binding IsPaneOpen, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
+                    </Grid>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <ItemsControl ItemsSource="{x:Bind ViewModel.Steps}">
                             <ItemsControl.ItemTemplate>
@@ -85,7 +100,10 @@
                                         </Grid>
                                         <Grid x:Name="StepText" Grid.Column="1" RowDefinitions="18,32,16" RowSpacing="4" Margin="0,2,20,12"
                                                     Visibility="{Binding ShowText, Converter={StaticResource BoolToVisibilityConverter}}">
-                                            <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="1" Text="{x:Bind PercentText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" />
+                                            </Grid>
                                             <TextBlock Grid.Row="1" Text="{x:Bind Detail, Mode=OneWay}" FontSize="12" TextWrapping="Wrap"
                                                        LineHeight="16" LineStackingStrategy="BlockLineHeight"
                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" MaxLines="2" TextTrimming="CharacterEllipsis" />

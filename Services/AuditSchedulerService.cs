@@ -297,33 +297,18 @@ public class AuditSchedulerService : IHostedService, IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             IsScanning = true;
             DateTime endTime = DateTime.UtcNow;
-            DateTime startTime;
-
-            if (fastScan)
-            {
-                // Fast Scan: incremental scan, only scan new data since last scan
-                int rangeHours = _settingsService.Current.FastScanRangeHours;
-                startTime = rangeHours > 0
-                    ? endTime.AddHours(-rangeHours)
-                    : _lastScanTime == DateTime.MinValue
-                        ? endTime.AddHours(-_settingsService.Current.ScanIntervalHours)
-                    : _lastScanTime;
-            }
-            else
-            {
-                // Full Scan: complete scan, scan all data from past 24 hours
-                startTime = endTime.AddHours(-24);
-            }
+            DateTime startTime = GetScanStart(fastScan, endTime, _lastScanTime, _settingsService.Current);
 
             _diagnosticLogService.Write(
                 $"Audit started: type={(fastScan ? "fast" : "full")}, from={startTime:O}, to={endTime:O}");
             ReportProgress(new(AuditStage.Collect, AuditStepState.Active, fastScan
                 ? "Fast scan: reading Windows event logs..."
-                : "Full scan: reading Windows event logs..."));
-            var events = await _eventLogService.ReadAllEventsAsync(startTime, endTime, cancellationToken);
+                : "Full scan: reading Windows event logs...") { StartsScan = true });
+            var events = await _eventLogService.ReadAllEventsAsync(startTime, endTime, cancellationToken, new AuditProgressReporter(ReportProgress));
             _diagnosticLogService.Write(
                 $"Event log read completed: type={(fastScan ? "fast" : "full")}, events={events.Count}, elapsedMs={stopwatch.ElapsedMilliseconds}");
-            ReportProgress(new(AuditStage.Collect, AuditStepState.Done, "{0:N0} events collected", events.Count));
+            ReportProgress(new(AuditStage.Collect, AuditStepState.Done, "{0:N0} events collected", events.Count)
+            { CompletedUnits = 5, TotalUnits = 5 });
 
             // Analyze with AI when there is data. An empty event window is still
             // a completed audit and must be persisted so the dashboard gives
@@ -419,6 +404,13 @@ public class AuditSchedulerService : IHostedService, IDisposable
             IsScanning = false;
             _auditGate.Release();
         }
+    }
+
+    internal static DateTime GetScanStart(bool fastScan, DateTime endTime, DateTime lastScanTime, AppSettings settings)
+    {
+        if (!fastScan) return endTime.AddHours(-24);
+        return settings.FastScanRangeHours > 0 ? endTime.AddHours(-settings.FastScanRangeHours)
+            : lastScanTime == DateTime.MinValue ? endTime.AddHours(-settings.ScanIntervalHours) : lastScanTime;
     }
 
     private void ReportProgress(AuditProgressEventArgs progress)

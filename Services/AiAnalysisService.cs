@@ -1132,7 +1132,8 @@ public sealed partial class AiAnalysisService
         var toAnalyze = new List<SecurityEvent>();
 
         // Filter out known safe events
-        var safeEvents = events.Where(e => KnownSafeEventIds.Contains(e.EventId)).ToList();
+        var safeEvents = events.Where(e => KnownSafeEventIds.Contains(e.EventId)
+            && string.Equals(e.LogName, "Security", StringComparison.OrdinalIgnoreCase)).ToList();
         filteredOut.AddRange(safeEvents);
         var remaining = events.Except(safeEvents).ToList();
 
@@ -1166,7 +1167,13 @@ public sealed partial class AiAnalysisService
         }
 
         filteredOut = events.Except(toAnalyze).ToList();
-        return toAnalyze;
+        return toAnalyze.OrderByDescending(evt => evt.Severity?.ToLowerInvariant() switch
+        {
+            "critical" => 3,
+            "error" => 2,
+            "warning" => 1,
+            _ => 0
+        }).ThenByDescending(evt => evt.Timestamp).ToList();
     }
 
     private static IEnumerable<SecurityEvent> SelectRepresentativeEvents(List<SecurityEvent> events, int samplesPerPattern)

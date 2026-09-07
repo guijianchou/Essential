@@ -95,6 +95,15 @@ public sealed partial class DashboardPage : Page
         }
     }
 
+    private void OnSourceFilterClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton button && button.Tag is string log)
+        {
+            ViewModel.SetSourceFilterCommand.Execute(log);
+            button.IsChecked = true;
+        }
+    }
+
     private async void OnFindingClick(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button

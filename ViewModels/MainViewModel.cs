@@ -45,24 +45,28 @@ public sealed partial class ScanStep : ObservableObject
     public bool HasCompletedConnector => HasConnector && IsDone;
     public string Detail => _progress.BatchNumber > 0
         ? AppText.Format("Batch {0}: {1}", _progress.BatchNumber, _progress.Message) : _progress.Message;
-    public string Tooltip => $"{Title}: {Detail}";
+    public string Tooltip => $"{Title} {PercentText}: {Detail}";
     public bool HasBatchProgress => ShowText && _total > 0;
-    public double Percent => _total == 0 ? 0 : 100d * _completed / _total;
-    public string BatchText => AppText.Format("{0}/{1} batches", _completed, _total);
+    public double Percent => IsDone ? 100 : _total == 0 ? 0 : Math.Clamp(100d * _completed / _total, 0, 100);
+    public string PercentText => IsDone || _total > 0 ? AppText.Format("{0:0}%", Math.Floor(Percent)) : "--";
+    public double CompletionFraction => State == AuditStepState.Skipped && (Stage != AuditStage.Translate || _total == 0) ? 1 : Percent / 100;
+    public string BatchText => AppText.Format(Stage == AuditStage.Collect ? "{0}/{1} groups" : "{0}/{1} batches", _completed, _total);
     public double RowHeight => ShowText ? 88 : 48;
 
     public bool Update(AuditProgressEventArgs progress)
     {
         if ((State is AuditStepState.Done or AuditStepState.Failed or AuditStepState.Skipped)
             && progress.State == AuditStepState.Active) return false;
+        int total = progress.TotalBatches > 0 ? progress.TotalBatches : progress.TotalUnits;
+        int completed = progress.TotalBatches > 0 ? progress.CompletedBatches : progress.CompletedUnits;
         // Concurrent requests can finish in a different order from their progress reports.
-        if (progress.TotalBatches > 0 && progress.CompletedBatches < _completed) return false;
+        if (total > 0 && completed < _completed) return false;
         long now = Stopwatch.GetTimestamp();
-        if (progress.State == AuditStepState.Active && State == progress.State && progress.TotalBatches == 0
+        if (progress.State == AuditStepState.Active && State == progress.State && total == 0
             && Stopwatch.GetElapsedTime(_lastDetailUpdate, now).TotalMilliseconds < 750) return false;
         _progress = progress;
-        _completed = Math.Max(_completed, progress.CompletedBatches);
-        _total = Math.Max(_total, progress.TotalBatches);
+        _total = Math.Max(_total, total);
+        _completed = IsDone ? _total : Math.Clamp(Math.Max(_completed, completed), 0, _total);
         _lastDetailUpdate = now;
         Refresh();
         return true;
@@ -104,6 +108,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public string SavedText => _savedAt.HasValue ? AppText.Format("Saved at {0:t}", _savedAt.Value) : string.Empty;
     public bool HasSavedResult => _savedAt.HasValue;
     public string PaneToggleText => AppText.Get(IsPaneOpen ? "Collapse sidebar" : "Expand sidebar");
+    public double WorkflowPercent => !_hasRun ? 0 : Math.Min(Steps.Any(step => step.IsFailed) ? 99 : 100,
+        Math.Floor(100 * Steps.Sum(step => step.CompletionFraction) / Steps.Count));
+    public string WorkflowPercentText => AppText.Format("{0:0}%", WorkflowPercent);
+    public string WorkflowCountText => AppText.Format("{0}/{1} stages", Steps.Count(step => step.IsDone
+        || step.State == AuditStepState.Skipped && step.CompletionFraction == 1), Steps.Count);
+    public string WorkflowProgressLabel => AppText.Get("Stage completion");
 
     public MainViewModel(AuditSchedulerService scheduler)
     {
@@ -121,7 +131,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     internal void ApplyProgress(AuditProgressEventArgs progress)
     {
-        if (progress.Stage == AuditStage.Collect && progress.State == AuditStepState.Active)
+        if (progress.StartsScan && progress.Stage == AuditStage.Collect && progress.State == AuditStepState.Active)
         {
             _hasRun = true;
             _savedAt = null;
@@ -160,6 +170,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(SavedText));
         OnPropertyChanged(nameof(HasSavedResult));
         OnPropertyChanged(nameof(PaneToggleText));
+        OnPropertyChanged(nameof(WorkflowPercent));
+        OnPropertyChanged(nameof(WorkflowPercentText));
+        OnPropertyChanged(nameof(WorkflowCountText));
+        OnPropertyChanged(nameof(WorkflowProgressLabel));
     }
 
     public void Dispose()

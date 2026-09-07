@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using LocalSecurityAudit.Helpers;
 using LocalSecurityAudit.Models;
 
@@ -22,15 +23,21 @@ public class EventLogService
     }
 
     // Key event IDs
-    private static readonly int[] SecurityEventIds = { 4624, 4625, 4648, 4672, 4720, 4732 };
-    private static readonly int[] FirewallEventIds = { 5152, 5157 };
+    private static readonly int[] SecurityEventIds =
+    {
+        1102, 1104, 1108, 4616, 4624, 4625, 4634, 4647, 4648, 4657, 4663,
+        4672, 4673, 4674, 4688, 4697, 4698, 4702, 4719, 4720, 4722, 4723,
+        4724, 4728, 4732, 4738, 4739, 4740, 4756, 4776, 4778, 4779, 4817, 4902, 4907
+    };
+    private static readonly int[] FirewallEventIds = { 4946, 4947, 4948, 4950, 5024, 5025, 5031, 5152, 5157 };
+    private const string FailureLevels = "(Level=1 or Level=2 or Level=3)";
 
     public async IAsyncEnumerable<SecurityEvent> ReadSecurityEventsAsync(
         DateTime from,
         DateTime to,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        string query = BuildQuery(from, to, $"({string.Join(" or ", SecurityEventIds.Select(id => $"EventID={id}"))})");
+        string query = BuildEventIdQuery("Security", from, to, SecurityEventIds);
 
         await foreach (var evt in ReadEventsFromLogAsync("Security", query, cancellationToken))
         {
@@ -43,8 +50,7 @@ public class EventLogService
         DateTime to,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Level=2 (Error) or Level=3 (Warning)
-        string query = BuildQuery(from, to, "(Level=2 or Level=3)");
+        string query = BuildQuery(from, to, FailureLevels);
 
         await foreach (var evt in ReadEventsFromLogAsync("System", query, cancellationToken))
         {
@@ -57,7 +63,7 @@ public class EventLogService
         DateTime to,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        string query = BuildQuery(from, to, "(Level=2 or Level=3)");
+        string query = BuildQuery(from, to, FailureLevels);
 
         await foreach (var evt in ReadEventsFromLogAsync("Application", query, cancellationToken))
         {
@@ -70,10 +76,10 @@ public class EventLogService
         DateTime to,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        string query = BuildQuery(from, to, $"({string.Join(" or ", FirewallEventIds.Select(id => $"EventID={id}"))})");
+        string query = BuildEventIdQuery("Security", from, to, FirewallEventIds);
 
         await foreach (var evt in ReadEventsFromLogAsync(
-            "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall",
+            "Security",
             query,
             cancellationToken))
         {
@@ -81,10 +87,21 @@ public class EventLogService
         }
     }
 
+    public async IAsyncEnumerable<SecurityEvent> ReadSetupEventsAsync(
+        DateTime from,
+        DateTime to,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        string query = BuildQuery(from, to, FailureLevels);
+        await foreach (var evt in ReadEventsFromLogAsync("Setup", query, cancellationToken))
+            yield return evt;
+    }
+
     public async Task<List<SecurityEvent>> ReadAllEventsAsync(
         DateTime from,
         DateTime to,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<AuditProgressEventArgs>? progress = null)
     {
         var stopwatch = Stopwatch.StartNew();
         _diagnosticLogService.Write(
@@ -95,37 +112,35 @@ public class EventLogService
 
             try
             {
+                ReportChannel(0, "Security");
                 await foreach (var evt in ReadSecurityEventsAsync(from, to, cancellationToken))
                 {
                     events.Add(evt);
                 }
 
+                ReportChannel(1, "System");
                 await foreach (var evt in ReadSystemEventsAsync(from, to, cancellationToken))
                 {
                     events.Add(evt);
                 }
 
+                ReportChannel(2, "Application");
                 await foreach (var evt in ReadApplicationEventsAsync(from, to, cancellationToken))
                 {
                     events.Add(evt);
                 }
 
-                try
+                ReportChannel(3, "Setup");
+                await foreach (var evt in ReadSetupEventsAsync(from, to, cancellationToken))
                 {
-                    await foreach (var evt in ReadFirewallEventsAsync(from, to, cancellationToken))
-                    {
-                        events.Add(evt);
-                    }
+                    events.Add(evt);
                 }
-                catch (OperationCanceledException)
+
+                ReportChannel(4, "Firewall (Security)");
+                // Windows Filtering Platform audit events are in Security, not the Firewall channel.
+                await foreach (var evt in ReadFirewallEventsAsync(from, to, cancellationToken))
                 {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _diagnosticLogService.WriteException(
-                        "Firewall event log read failed; continuing without firewall events",
-                        ex);
+                    events.Add(evt);
                 }
 
                 _diagnosticLogService.Write(
@@ -139,6 +154,10 @@ public class EventLogService
                     ex);
                 throw;
             }
+
+            void ReportChannel(int completed, string channel) => progress?.Report(
+                new(AuditStage.Collect, AuditStepState.Active, "Reading {0}; {1:N0} events collected", channel, events.Count)
+                { CompletedUnits = completed, TotalUnits = 5 });
         }, cancellationToken);
     }
 
@@ -163,6 +182,15 @@ public class EventLogService
                 yield return EventLogParser.Parse(eventRecord, logName);
             }
         }
+    }
+
+    private static string BuildEventIdQuery(string logName, DateTime from, DateTime to, int[] eventIds)
+    {
+        // Windows Event Log limits XPath expression complexity; split long ID allowlists.
+        return new XElement("QueryList", new XElement("Query", new XAttribute("Id", 0), new XAttribute("Path", logName),
+            eventIds.Chunk(16).Select(ids => new XElement("Select", new XAttribute("Path", logName),
+                BuildQuery(from, to, $"({string.Join(" or ", ids.Select(id => $"EventID={id}"))})")))))
+            .ToString(SaveOptions.DisableFormatting);
     }
 
     private static string BuildQuery(DateTime from, DateTime to, string systemPredicate)

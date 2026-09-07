@@ -89,6 +89,20 @@
                 </Grid>
 
                 <!-- Findings by category -->
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" HorizontalScrollMode="Enabled" VerticalScrollMode="Disabled">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ToggleButton Tag="All" Content="{x:Bind ViewModel.OverviewLabel, Mode=OneWay}" Height="32" Padding="12,0" CornerRadius="4"
+                                      IsChecked="{x:Bind ViewModel.IsSourceAll, Mode=OneWay}" Click="OnSourceFilterClick" />
+                        <ToggleButton Tag="Application" Content="{x:Bind ViewModel.ApplicationLabel, Mode=OneWay}" Height="32" Padding="12,0" CornerRadius="4"
+                                      IsChecked="{x:Bind ViewModel.IsSourceApplication, Mode=OneWay}" Click="OnSourceFilterClick" />
+                        <ToggleButton Tag="Security" Content="{x:Bind ViewModel.SecurityLabel, Mode=OneWay}" Height="32" Padding="12,0" CornerRadius="4"
+                                      IsChecked="{x:Bind ViewModel.IsSourceSecurity, Mode=OneWay}" Click="OnSourceFilterClick" />
+                        <ToggleButton Tag="Setup" Content="{x:Bind ViewModel.SetupLabel, Mode=OneWay}" Height="32" Padding="12,0" CornerRadius="4"
+                                      IsChecked="{x:Bind ViewModel.IsSourceSetup, Mode=OneWay}" Click="OnSourceFilterClick" />
+                        <ToggleButton Tag="System" Content="{x:Bind ViewModel.SystemLabel, Mode=OneWay}" Height="32" Padding="12,0" CornerRadius="4"
+                                      IsChecked="{x:Bind ViewModel.IsSourceSystem, Mode=OneWay}" Click="OnSourceFilterClick" />
+                    </StackPanel>
+                </ScrollViewer>
                 <Border Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Findings], Source={StaticResource AppText}}">
                     <StackPanel Spacing="14">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">

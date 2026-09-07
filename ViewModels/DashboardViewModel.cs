@@ -187,6 +187,28 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     public bool IsFilterMedium => SeverityFilter == FilterMedium;
     public bool IsFilterLow => SeverityFilter == FilterLow;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSourceAll), nameof(IsSourceApplication), nameof(IsSourceSecurity), nameof(IsSourceSetup), nameof(IsSourceSystem))]
+    private string sourceFilter = FilterAll;
+
+    public bool IsSourceAll => SourceFilter == FilterAll;
+    public bool IsSourceApplication => SourceFilter == "Application";
+    public bool IsSourceSecurity => SourceFilter == "Security";
+    public bool IsSourceSetup => SourceFilter == "Setup";
+    public bool IsSourceSystem => SourceFilter == "System";
+    public string OverviewLabel => AppText.Format("Overview {0}", _allIssues.Count);
+    public string ApplicationLabel => SourceLabel("Application");
+    public string SecurityLabel => SourceLabel("Security");
+    public string SetupLabel => SourceLabel("Setup");
+    public string SystemLabel => SourceLabel("System");
+
+    private string SourceLabel(string log) => $"{AppText.Get(log)} {_allIssues.Count(issue => string.Equals(issue.LogName, log, StringComparison.OrdinalIgnoreCase))}";
+
+    [RelayCommand]
+    private void SetSourceFilter(string? log) => SourceFilter = log is "Application" or "Security" or "Setup" or "System" ? log : FilterAll;
+
+    partial void OnSourceFilterChanged(string value) => RebuildSections();
+
     public DashboardViewModel(
         DataStorageService storageService,
         AuditSchedulerService schedulerService)
@@ -447,13 +469,20 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private void RebuildSections()
     {
         var previousState = FindingSections.ToDictionary(section => section.Name, section => section.IsExpanded);
-
+        var sourceIssues = IsSourceAll ? _allIssues : _allIssues.Where(issue =>
+            string.Equals(issue.LogName, SourceFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+        TotalFindings = sourceIssues.Count;
+        HighCount = sourceIssues.Count(issue => issue.IsHigh);
+        MediumCount = sourceIssues.Count(issue => issue.IsMedium);
+        LowCount = sourceIssues.Count(issue => issue.IsLow);
+        foreach (string property in new[] { nameof(OverviewLabel), nameof(ApplicationLabel), nameof(SecurityLabel), nameof(SetupLabel), nameof(SystemLabel) })
+            OnPropertyChanged(property);
         var visibleIssues = SeverityFilter switch
         {
-            FilterHigh => _allIssues.Where(issue => issue.IsHigh).ToList(),
-            FilterMedium => _allIssues.Where(issue => issue.IsMedium).ToList(),
-            FilterLow => _allIssues.Where(issue => issue.IsLow).ToList(),
-            _ => _allIssues.ToList()
+            FilterHigh => sourceIssues.Where(issue => issue.IsHigh).ToList(),
+            FilterMedium => sourceIssues.Where(issue => issue.IsMedium).ToList(),
+            FilterLow => sourceIssues.Where(issue => issue.IsLow).ToList(),
+            _ => sourceIssues.ToList()
         };
 
         var groups = visibleIssues
@@ -501,6 +530,10 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         if (!HasAuditData)
         {
             FindingsSummaryText = AppText.Get("No findings yet");
+        }
+        else if (sourceIssues.Count == 0 && !IsSourceAll)
+        {
+            FindingsSummaryText = AppText.Format("No findings from {0}", AppText.Get(SourceFilter));
         }
         else if (_allIssues.Count == 0)
         {

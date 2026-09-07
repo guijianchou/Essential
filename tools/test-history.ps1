@@ -241,6 +241,7 @@ Test-Case 'Dashboard keeps its last successful display when storage or a scan fa
         $type.GetField('_schedulerService', $flags).SetValue($model, $scheduler)
         $type.GetField('_allIssues', $flags).SetValue($model, [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssueEnhanced]]::new())
         $type.GetField('severityFilter', $flags).SetValue($model, 'All')
+        $type.GetField('sourceFilter', $flags).SetValue($model, 'All')
         $model.FindingSections = [Collections.ObjectModel.ObservableCollection[LocalSecurityAudit.ViewModels.FindingSection]]::new()
         $load = $type.GetMethod('LoadDataAsync', $flags)
         $load.Invoke($model, @()).GetAwaiter().GetResult()
@@ -300,6 +301,42 @@ Test-Case 'Failed refresh preserves only data from the same period' {
         $load.Invoke($model, @()).GetAwaiter().GetResult()
         Assert-True (-not $model.HasData -and $model.FindingCountText -eq '0' -and $model.IsStatusVisible -and -not $model.IsLoading) 'A failed new period displayed old-period data or stayed loading.'
     }
+}
+
+Test-Case 'Dashboard source tabs, summary counts and severity filters select the same evidence' {
+    $type = $assembly.GetType('LocalSecurityAudit.ViewModels.DashboardViewModel', $true)
+    $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
+    $type.GetField('_allIssues', $flags).SetValue($model, [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssueEnhanced]]::new())
+    $type.GetField('severityFilter', $flags).SetValue($model, 'All')
+    $type.GetField('sourceFilter', $flags).SetValue($model, 'All')
+    $model.FindingSections = [Collections.ObjectModel.ObservableCollection[LocalSecurityAudit.ViewModels.FindingSection]]::new()
+    $audit = [LocalSecurityAudit.Models.AuditResult]::new()
+    $audit.Timestamp = [datetime]::UtcNow
+    foreach ($log in 'System', 'Application', 'Security', 'Security', 'Setup', '') {
+        $issue = [LocalSecurityAudit.Models.AuditIssue]::new()
+        $issue.LogName = $log
+        $issue.Title = "From $log"
+        $issue.Severity = if ($log -eq 'System') { 'High' } else { 'Medium' }
+        $issue.Category = 'System'
+        $issue.EventDescription = "Original $log evidence"
+        $issue.Recommendation = "Review $log record"
+        $audit.Findings.Add($issue)
+    }
+    $type.GetMethod('ApplyResult', $flags).Invoke($model, @($audit))
+    Assert-True ($model.TotalFindings -eq 6 -and $model.HighCount -eq 1 -and $model.SecurityLabel.EndsWith('2')) 'Overview or source counts omit findings.'
+    foreach ($log in 'Application', 'Security', 'Setup', 'System') {
+        $model.SetSourceFilterCommand.Execute($log)
+        $expected = if ($log -eq 'Security') { 2 } else { 1 }
+        Assert-True ($model.TotalFindings -eq $expected -and $model.PriorityFindings.Count -eq $expected -and ($model.FindingSections | Measure-Object Count -Sum).Sum -eq $expected) "Source $log summary and findings differ."
+        Assert-True ($model.PriorityFindings[0].LogName -eq $log -and $model.PriorityFindings[0].EventDescription -eq "Original $log evidence") 'A category name was used in place of the actual source log.'
+    }
+    $model.SetSeverityFilterCommand.Execute('High')
+    Assert-True ($model.PriorityFindings.Count -eq 1 -and $model.PriorityFindings[0].LogName -eq 'System') 'Severity filter ignored the source tab.'
+    $model.SetSourceFilterCommand.Execute('Setup')
+    Assert-True ($model.TotalFindings -eq 1 -and $model.HighCount -eq 0 -and $model.PriorityFindings.Count -eq 0 -and $model.ShowNoFilterMatches) 'Empty combined filter retained another source.'
+    $model.SetSourceFilterCommand.Execute('All')
+    $model.SetSeverityFilterCommand.Execute('All')
+    Assert-True ($model.TotalFindings -eq 6 -and ($model.FindingSections | Measure-Object Count -Sum).Sum -eq 6) 'Returning to overview lost legacy findings without a source.'
 }
 
 Write-Output "$script:passed passed; $script:failed failed. No app launch, network requests or user-data writes."

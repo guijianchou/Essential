@@ -1,5 +1,12 @@
 # 项目修改记录
 
+## 0.3.1 / 2026-09-07
+
+- 修复 System / Application 查询漏掉 Critical 事件的问题，补齐 Setup 采集和 Security 审计事件；防火墙审计改从正确的 Security 通道读取。Full scan 仍固定为 24 小时。
+- 区分 System BugCheck 1001 与 Application 1001；问题合并保留日志和来源边界，AI 提示明确分析 Kernel-Power 41 等异常重启事件，不把事件本身当作电源故障证据。
+- 首页增加总览、Application、Security、Setup、System 来源标签，联动问题数量、严重程度筛选和详情。
+- 侧栏显示阶段完成度百分比、当前阶段百分比及批次数；读取分组更新不会重置流程，失败不会显示为 100%。
+
 ## 0.3.0 / 2026-09-07
 
 - 移除 Dashboard 顶部重复扫描指示和手动刷新；最新记录损坏时回退到最近可用记录，读取失败时保留已展示结果。

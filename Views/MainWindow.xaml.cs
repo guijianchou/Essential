@@ -203,6 +203,8 @@ public sealed partial class MainWindow : Window
         {
             bool motion = _uiSettings.AnimationsEnabled;
             ring.IsActive = step.IsActive && motion;
+            meter.Foreground = ThemeResources.GetBrush(element, step.IsFailed ? "HealthRiskBrush"
+                : step.IsDone ? "HealthGoodBrush" : "HealthWarningBrush");
             staticIcon.Visibility = step.IsActive && !motion ? Visibility.Visible : Visibility.Collapsed;
             if (previousState != step.State)
             {

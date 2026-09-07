@@ -286,14 +286,14 @@ Test-Case 'Cached findings are cloned before global reference mapping' {
     Assert-True ($issues[0].EventRef -eq 'event-0') 'Global reference leaked into the cache.'
 }
 
-Test-Case 'Merged findings preserve latest source, both event references and original text' {
+Test-Case 'Same-provider findings preserve latest evidence, both event references and original text' {
     $allIssues = [System.Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
     foreach ($index in 0, 1) {
         $events = [System.Collections.Generic.List[LocalSecurityAudit.Models.SecurityEvent]]::new()
         $event = New-TestEvent
         $event.Timestamp = $event.Timestamp.AddMinutes($index)
         $event.EventRecordId += $index
-        $event.Source += $index
+        $event.Description += "`nSample $index"
         $events.Add($event)
         $issues = Invoke-AnalysisMethod 'ParseIssuesPayload' @('{"issues":[{"key":"test_failure","eventRef":"event-0","title":"Synthetic failure","description":"Test description","rootCause":"Test cause","recommendation":"Test action","relatedEventRefs":["event-0"]}]}')
         $issues = Invoke-AnalysisMethod 'NormalizeIssues' @($issues, $events)
@@ -303,7 +303,7 @@ Test-Case 'Merged findings preserve latest source, both event references and ori
     $merged = Invoke-AnalysisMethod 'MergeDuplicateIssues' (,$allIssues)
     Assert-True ($merged.Count -eq 1) 'One pattern was not merged.'
     $finding = $merged[0]
-    Assert-True ($finding.EventRecordId -eq '102' -and $finding.Source -eq 'SyntheticProvider1') 'Latest source was lost.'
+    Assert-True ($finding.EventRecordId -eq '102' -and $finding.Source -eq 'SyntheticProvider' -and $finding.EventDescription.EndsWith('Sample 1')) 'Latest evidence was lost.'
     Assert-True ($finding.SupportingEventCount -eq 2 -and $finding.RelatedEventRefs.Contains('event-50')) 'Cross-batch evidence references collided.'
     Assert-True (($finding.LastSeenUtc - $finding.FirstSeenUtc).TotalMinutes -eq 1) 'Observation range was lost.'
     Assert-True ($finding.EventDescription.Contains("`n") -and $finding.EventAdditionalData.Contains("`n")) 'Original formatting was lost.'
@@ -557,6 +557,7 @@ Test-Case 'The sidebar stays hidden until a scan starts and retains its saved re
     Assert-True (-not $viewModel.IsWorkflowVisible) 'Navigation or language changes displayed an unstarted scan.'
     $apply = $viewModelType.GetMethod('ApplyProgress', $privateFlags)
     $start = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Reading', [object[]]@())
+    $start.StartsScan = $true
     $null = $apply.Invoke($viewModel, @($start))
     Assert-True ($viewModel.IsWorkflowVisible -and $steps[0].IsActive) 'A real scan did not reveal progress.'
     $saved = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Save', 'Done', 'Saved at {0:t}', [object[]]@([datetime]::Now))
@@ -625,6 +626,162 @@ foreach ($language in 'zh-CN', 'en') {
             [LocalSecurityAudit.Services.AppText]::Current.SetLanguage($previousLanguage)
         }
     }
+}
+
+Test-Case 'Failure-level query includes Kernel-Power Critical events and excludes information' {
+    $type = $assembly.GetType('LocalSecurityAudit.Services.EventLogService', $true)
+    $predicate = $type.GetField('FailureLevels', $privateFlags).GetRawConstantValue()
+    foreach ($level in 1..5) {
+        [xml]$eventXml = "<Event><System><Provider Name='Microsoft-Windows-Kernel-Power'/><EventID>41</EventID><Level>$level</Level></System></Event>"
+        $selected = $null -ne $eventXml.SelectSingleNode("*[System[$predicate]]")
+        Assert-True ($selected -eq ($level -le 3)) "Wrong selection for level $level."
+    }
+    $from = [datetime]::new(2026, 9, 6, 0, 0, 0, [DateTimeKind]::Utc)
+    $query = $type.GetMethod('BuildQuery', $privateFlags).Invoke($null, @($from, $from.AddDays(1), $predicate))
+    Assert-True ($query.Contains($from.ToString('O')) -and $query.Contains($from.AddDays(1).ToString('O')) -and $query.Contains($predicate)) 'Failure predicate or UTC bounds were lost.'
+}
+
+Test-Case 'Security allowlist covers audit changes and splits XPath queries within Windows limits' {
+    $type = $assembly.GetType('LocalSecurityAudit.Services.EventLogService', $true)
+    $securityIds = $type.GetField('SecurityEventIds', $privateFlags).GetValue($null)
+    $firewallIds = $type.GetField('FirewallEventIds', $privateFlags).GetValue($null)
+    foreach ($id in 1102, 4719, 4728, 4732, 4756, 4697, 4907) { Assert-True ($id -in $securityIds) "Missing Security audit ID $id." }
+    foreach ($id in 4946, 5025, 5152, 5157) { Assert-True ($id -in $firewallIds) "Missing firewall audit ID $id." }
+    Assert-True (@($securityIds | Where-Object { $_ -in $firewallIds }).Count -eq 0) 'Firewall reads duplicate Security records.'
+    $now = [datetime]::UtcNow
+    foreach ($ids in (,$securityIds), (,$firewallIds)) {
+        [xml]$query = $type.GetMethod('BuildEventIdQuery', $privateFlags).Invoke($null, @('Security', $now.AddDays(-1), $now, [int[]]$ids[0]))
+        $selectors = @($query.QueryList.Query.Select)
+        $seen = @(foreach ($select in $selectors) {
+            Assert-True ($select.Path -eq 'Security') 'Firewall or Security query targets the wrong channel.'
+            $matches = [regex]::Matches($select.InnerText, 'EventID=(\d+)')
+            Assert-True ($matches.Count -le 16) 'An XPath selector exceeds its expression budget.'
+            foreach ($match in $matches) { [int]$match.Groups[1].Value }
+        })
+        Assert-True ($seen.Count -eq $ids[0].Count -and @($seen | Select-Object -Unique).Count -eq $seen.Count) 'Structured query lost or duplicated event IDs.'
+    }
+}
+
+Test-Case 'Full scans remain exactly 24 hours while fast scans retain their existing range' {
+    $type = $assembly.GetType('LocalSecurityAudit.Services.AuditSchedulerService', $true)
+    $method = $type.GetMethod('GetScanStart', $privateFlags)
+    $now = [datetime]::new(2026, 9, 7, 12, 0, 0, [DateTimeKind]::Utc)
+    $config = [LocalSecurityAudit.Models.AppSettings]::new()
+    $config.RetentionDays = 30
+    $config.ScanIntervalHours = 4
+    $config.FastScanRangeHours = 2
+    $last = $now.AddMinutes(-20)
+    Assert-True ($method.Invoke($null, @($false, $now, $last, $config)) -eq $now.AddHours(-24)) 'Full scan range changed with history retention or fast-scan settings.'
+    Assert-True ($method.Invoke($null, @($true, $now, $last, $config)) -eq $now.AddHours(-2)) 'Fixed fast range changed.'
+    $config.FastScanRangeHours = 0
+    Assert-True ($method.Invoke($null, @($true, $now, $last, $config)) -eq $last) 'Incremental fast range changed.'
+}
+
+Test-Case 'Kernel-Power survives filtering and leads analysis before routine events' {
+    $configFiltering = $settings.EnableSmartFiltering
+    try {
+        $settings.EnableSmartFiltering = $true
+        $events = [Collections.Generic.List[LocalSecurityAudit.Models.SecurityEvent]]::new()
+        $routine = New-TestEvent
+        $routine.Severity = 'Information'
+        $events.Add($routine)
+        $kernel = New-TestEvent
+        $kernel.EventId = 41
+        $kernel.LogName = 'System'
+        $kernel.Source = 'Microsoft-Windows-Kernel-Power'
+        $kernel.Severity = 'Critical'
+        $kernel.AdditionalData = '<EventData><Data Name="BugcheckCode">0</Data></EventData>'
+        $events.Add($kernel)
+        $sameIdOtherLog = New-TestEvent
+        $sameIdOtherLog.EventId = 5156
+        $sameIdOtherLog.LogName = 'System'
+        $events.Add($sameIdOtherLog)
+        $arguments = [object[]]@($events, $null)
+        $filtered = $serviceType.GetMethod('ApplySmartFiltering', $privateFlags).Invoke($analysis, $arguments)
+        Assert-True ($filtered[0] -eq $kernel -and $filtered.Count -eq 3) 'Critical evidence was sampled away or a different log was excluded by an unrelated event ID.'
+        $issue = New-BilingualFinding
+        $issue.EventRef = 'event-0'
+        $issue.Category = 'Login'
+        $normalized = Invoke-AnalysisMethod 'NormalizeIssues' @([LocalSecurityAudit.Models.AuditIssue[]]@($issue), $filtered)
+        Assert-True ($normalized[0].Category -eq 'System' -and $normalized[0].LogName -eq 'System' -and $normalized[0].EventId -eq '41' -and $normalized[0].EventAdditionalData -eq $kernel.AdditionalData) 'Kernel-Power classification or original evidence was lost.'
+    }
+    finally { $settings.EnableSmartFiltering = $configFiltering }
+}
+
+Test-Case 'Bugcheck and application event 1001 use their own log and provider namespaces' {
+    foreach ($case in @(
+        @('System', 'Microsoft-Windows-WER-SystemErrorReporting', 'System'),
+        @('System', 'BugCheck', 'System'),
+        @('Application', 'Windows Error Reporting', 'Application'),
+        @('Setup', 'Microsoft-Windows-Servicing', 'System')
+    )) {
+        $evt = New-TestEvent
+        $evt.EventId = 1001
+        $evt.LogName = $case[0]
+        $evt.Source = $case[1]
+        $events = [Collections.Generic.List[LocalSecurityAudit.Models.SecurityEvent]]::new()
+        $events.Add($evt)
+        $finding = New-BilingualFinding
+        $finding.EventRef = 'event-0'
+        $finding.Category = 'Login'
+        $normalized = Invoke-AnalysisMethod 'NormalizeIssues' @([LocalSecurityAudit.Models.AuditIssue[]]@($finding), $events)
+        Assert-True ($normalized[0].Category -eq $case[2]) "Incorrect category for $($case[0])/$($case[1])."
+        $normalized[0].Category = 'Login'
+        $display = [LocalSecurityAudit.Services.IssueCategorizer]::CategorizeIssue($normalized[0])
+        Assert-True ($display.CategoryLabel -eq [LocalSecurityAudit.Services.AppText]::Get($case[2])) 'Stored findings retained an incorrect legacy category.'
+    }
+}
+
+Test-Case 'Pattern merging cannot hide a finding from another log or provider' {
+    $issues = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
+    foreach ($origin in @(@('System', 'SharedProvider'), @('Setup', 'SharedProvider'), @('System', 'OtherProvider'))) {
+        $issue = New-BilingualFinding 'same-key'
+        $issue.Category = 'System'
+        $issue.LogName = $origin[0]
+        $issue.Source = $origin[1]
+        $issues.Add($issue)
+    }
+    $merged = Invoke-AnalysisMethod 'MergeDuplicateIssues' (,$issues)
+    Assert-True ($merged.Count -eq 3 -and @($merged.LogName | Select-Object -Unique).Count -eq 2) 'A merged issue erased another log or provider.'
+}
+
+Test-Case 'Workflow exposes confirmed percentages and resets only on a new scan' {
+    $type = $assembly.GetType('LocalSecurityAudit.ViewModels.MainViewModel', $true)
+    $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
+    $steps = [Collections.Generic.List[LocalSecurityAudit.ViewModels.ScanStep]]::new()
+    foreach ($stage in [Enum]::GetValues([LocalSecurityAudit.Services.AuditStage])) { $steps.Add([LocalSecurityAudit.ViewModels.ScanStep]::new($stage)) }
+    $type.GetField('<Steps>k__BackingField', $privateFlags).SetValue($model, $steps)
+    $apply = $type.GetMethod('ApplyProgress', $privateFlags)
+    $start = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Reading', [object[]]@())
+    $start.StartsScan = $true
+    $null = $apply.Invoke($model, @($start))
+    foreach ($completed in 0..4) {
+        $reading = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Reading group', [object[]]@())
+        $reading.CompletedUnits = $completed
+        $reading.TotalUnits = 5
+        $null = $apply.Invoke($model, @($reading))
+        Assert-True ($steps[0].Percent -eq 20 * $completed -and $steps[0].PercentText.Contains('%')) 'Read-group percentage is incorrect.'
+    }
+    foreach ($stage in 'Collect', 'Route') {
+        $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new($stage, 'Done', 'Done', [object[]]@())))
+    }
+    $batch = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'Batch complete', [object[]]@())
+    $batch.CompletedBatches = 2
+    $batch.TotalBatches = 4
+    $null = $apply.Invoke($model, @($batch))
+    Assert-True ($steps[2].PercentText -eq '50%' -and $model.WorkflowPercent -eq 41) 'Batch percentage or overall stage completion is incorrect.'
+    $lateRead = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Late read', [object[]]@())
+    $lateRead.TotalUnits = 5
+    $null = $apply.Invoke($model, @($lateRead))
+    Assert-True ($steps[2].Percent -eq 50 -and $model.WorkflowPercent -eq 41) 'A late read progress event reset the workflow.'
+    foreach ($stage in 'Analyze', 'Save', 'Translate', 'Complete') {
+        $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new($stage, 'Done', 'Done', [object[]]@())))
+    }
+    Assert-True ($model.WorkflowPercentText -eq '100%') 'Completed workflow did not reach 100 percent.'
+    $null = $apply.Invoke($model, @($start))
+    Assert-True ($model.WorkflowPercent -eq 0 -and -not $model.HasSavedResult) 'New scan retained completion progress.'
+    $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Failed', 'Failure', [object[]]@())))
+    Assert-True ($model.WorkflowPercent -lt 100) 'Failed scan was presented as complete.'
 }
 
 Write-Output "$script:passed passed; $script:failed failed. No network requests or user-data writes."
