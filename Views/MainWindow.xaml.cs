@@ -120,7 +120,6 @@ public sealed partial class MainWindow : Window
         ApplyInitialBounds();
         ApplyTitleBarTheme(Root.ActualTheme);
         InitializeTrayIcon();
-        _ = ViewModel.LoadSavedTimeAsync(App.GetService<DataStorageService>());
     }
 
     private void OnNavigationSizeChanged(object sender, SizeChangedEventArgs e)

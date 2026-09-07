@@ -48,9 +48,10 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.PaneFooter>
-                <Grid x:Name="WorkflowHost" RowDefinitions="Auto,*,Auto" Padding="0,12,0,8">
+                <Grid x:Name="WorkflowHost" RowDefinitions="Auto,*,Auto" Padding="0,12,0,8"
+                      Visibility="{Binding IsWorkflowVisible, Converter={StaticResource BoolToVisibilityConverter}}">
                     <TextBlock x:Name="WorkflowHeading" Text="{x:Bind ViewModel.WorkflowTitle, Mode=OneWay}" Margin="20,0,16,14"
-                               FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"
+                               FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"
                                Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}" />
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <ItemsControl ItemsSource="{x:Bind ViewModel.Steps}">
@@ -82,17 +83,20 @@
                                             <FontIcon Glyph="{x:Bind InactiveGlyph, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                                       Visibility="{Binding IsInactive, Converter={StaticResource BoolToVisibilityConverter}}" />
                                         </Grid>
-                                        <StackPanel x:Name="StepText" Grid.Column="1" Spacing="4" Margin="0,2,20,12"
+                                        <Grid x:Name="StepText" Grid.Column="1" RowDefinitions="18,32,16" RowSpacing="4" Margin="0,2,20,12"
                                                     Visibility="{Binding ShowText, Converter={StaticResource BoolToVisibilityConverter}}">
-                                            <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                            <TextBlock Text="{x:Bind Detail, Mode=OneWay}" FontSize="12" TextWrapping="Wrap"
+                                            <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Row="1" Text="{x:Bind Detail, Mode=OneWay}" FontSize="12" TextWrapping="Wrap"
+                                                       LineHeight="16" LineStackingStrategy="BlockLineHeight"
                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" MaxLines="2" TextTrimming="CharacterEllipsis" />
-                                            <StackPanel Spacing="5" Visibility="{Binding HasBatchProgress, Converter={StaticResource BoolToVisibilityConverter}}">
+                                            <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8"
+                                                  Visibility="{Binding HasBatchProgress, Converter={StaticResource BoolToVisibilityConverter}}">
                                                 <ProgressBar x:Name="BatchProgress" Minimum="0" Maximum="100" Height="3"
+                                                             VerticalAlignment="Center"
                                                              Foreground="{ThemeResource HealthGoodBrush}" />
-                                                <TextBlock Text="{x:Bind BatchText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                            </StackPanel>
-                                        </StackPanel>
+                                                <TextBlock Grid.Column="1" Text="{x:Bind BatchText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </Grid>
+                                        </Grid>
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -100,7 +104,6 @@
                     </ScrollViewer>
                     <StackPanel x:Name="WorkflowSummary" Grid.Row="2" Margin="20,10,16,0" Spacing="4"
                                 Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <TextBlock Text="{Binding [EnglishSimplifiedChinese], Source={StaticResource AppText}}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text="{x:Bind ViewModel.SavedText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource HealthGoodBrush}"
                                    Visibility="{Binding HasSavedResult, Converter={StaticResource BoolToVisibilityConverter}}" />
                     </StackPanel>
@@ -111,7 +114,7 @@
                                     ToolTipService.ToolTip="{x:Bind ViewModel.PaneToggleText, Mode=OneWay}"
                                     AutomationProperties.Name="{x:Bind ViewModel.PaneToggleText, Mode=OneWay}">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="{x:Bind ViewModel.PaneToggleGlyph, Mode=OneWay}" FontSize="14" />
+                        <FontIcon Glyph="&#xE700;" FontSize="16" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>

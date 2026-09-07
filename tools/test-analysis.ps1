@@ -540,5 +540,92 @@ Test-Case 'Concurrent stream details identify their batch without moving aggrega
     Assert-True ($step.IsActive -and $step.Percent -gt 33 -and -not $step.HasBatchProgress) 'Collapsing the sidebar lost scan state.'
 }
 
+Test-Case 'The sidebar stays hidden until a scan starts and retains its saved result afterward' {
+    # Construct the state model without activating WinUI or loading user services.
+    $viewModelType = $assembly.GetType('LocalSecurityAudit.ViewModels.MainViewModel', $true)
+    $viewModel = [System.Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($viewModelType)
+    $steps = [System.Collections.Generic.List[LocalSecurityAudit.ViewModels.ScanStep]]::new()
+    foreach ($stage in [Enum]::GetValues([LocalSecurityAudit.Services.AuditStage])) {
+        $steps.Add([LocalSecurityAudit.ViewModels.ScanStep]::new($stage))
+    }
+    $viewModelType.GetField('<Steps>k__BackingField', $privateFlags).SetValue($viewModel, $steps)
+    $viewModel.IsPaneOpen = $true
+    Assert-True (-not $viewModel.IsWorkflowVisible -and -not $viewModel.HasSavedResult) 'An idle launch displayed scan progress or a stale save notice.'
+    $viewModel.IsPaneOpen = $false
+    $viewModel.IsPaneOpen = $true
+    $null = $viewModelType.GetMethod('OnLanguageChanged', $privateFlags).Invoke($viewModel, @($null, [EventArgs]::Empty))
+    Assert-True (-not $viewModel.IsWorkflowVisible) 'Navigation or language changes displayed an unstarted scan.'
+    $apply = $viewModelType.GetMethod('ApplyProgress', $privateFlags)
+    $start = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Reading', [object[]]@())
+    $null = $apply.Invoke($viewModel, @($start))
+    Assert-True ($viewModel.IsWorkflowVisible -and $steps[0].IsActive) 'A real scan did not reveal progress.'
+    $saved = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Save', 'Done', 'Saved at {0:t}', [object[]]@([datetime]::Now))
+    $null = $apply.Invoke($viewModel, @($saved))
+    $complete = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Complete', 'Done', 'Scan complete', [object[]]@())
+    $null = $apply.Invoke($viewModel, @($complete))
+    Assert-True ($viewModel.IsWorkflowVisible -and $viewModel.HasSavedResult) 'Finishing the scan hid its confirmation.'
+    $null = $apply.Invoke($viewModel, @($start))
+    Assert-True (-not $viewModel.HasSavedResult -and $steps[5].IsInactive) 'A new scan retained the old completion state.'
+}
+
+Test-Case 'Every workflow node uses equal spacing in expanded and compact modes' {
+    $previousLanguage = [LocalSecurityAudit.Services.AppText]::Current.Language
+    try {
+        foreach ($language in 'en', 'zh-CN') {
+            [LocalSecurityAudit.Services.AppText]::Current.SetLanguage($language)
+            foreach ($expanded in $true, $false) {
+                $heights = @(foreach ($stage in [Enum]::GetValues([LocalSecurityAudit.Services.AuditStage])) {
+                    $step = [LocalSecurityAudit.ViewModels.ScanStep]::new($stage)
+                    $step.ShowText = $expanded
+                    foreach ($state in 'Pending', 'Active', 'Done', 'Failed', 'Skipped') {
+                        $step.Reset()
+                        $null = $step.Update([LocalSecurityAudit.Services.AuditProgressEventArgs]::new($stage, $state, 'Detail', [object[]]@()))
+                        $step.RowHeight
+                    }
+                })
+                Assert-True (@($heights | Select-Object -Unique).Count -eq 1) 'Stage, state or language changes produced unequal node spacing.'
+            }
+        }
+    }
+    finally { [LocalSecurityAudit.Services.AppText]::Current.SetLanguage($previousLanguage) }
+}
+
+foreach ($language in 'zh-CN', 'en') {
+    Test-Case "Chart fonts cover localized day labels, categories and tooltip text in $language" {
+        $assemblyDirectory = Split-Path -Parent $assembly.Location
+        $null = [System.Runtime.InteropServices.NativeLibrary]::Load((Join-Path $assemblyDirectory 'runtimes/win-x64/native/libSkiaSharp.dll'))
+        $previousLanguage = [LocalSecurityAudit.Services.AppText]::Current.Language
+        $paint = $null
+        $numbers = $null
+        try {
+            [LocalSecurityAudit.Services.AppText]::Current.SetLanguage($language)
+            $paint = [LocalSecurityAudit.Helpers.ChartPalette]::TextPaint([SkiaSharp.SKColors]::Black, $true)
+            $numbers = [LocalSecurityAudit.Helpers.ChartPalette]::TextPaint([SkiaSharp.SKColors]::Black, $false)
+            $labels = @([LocalSecurityAudit.Services.AppText]::Get('Today'))
+            foreach ($offset in 0..6) {
+                $labels += ([datetime]::new(2026, 9, 1).AddDays($offset)).ToString('ddd d', [LocalSecurityAudit.Services.AppText]::Culture)
+            }
+            foreach ($category in [Enum]::GetValues([LocalSecurityAudit.Models.IssueCategory])) {
+                $labels += [LocalSecurityAudit.Services.AppText]::Get([LocalSecurityAudit.Models.AuditIssueEnhanced]::GetCategoryLabel($category))
+            }
+            foreach ($label in 'High', 'Medium', 'Low', 'Health', 'Findings') {
+                $labels += [LocalSecurityAudit.Services.AppText]::Get($label)
+            }
+            foreach ($label in $labels) {
+                Assert-True ($paint.SKTypeface.ContainsGlyphs($label)) "Chart typeface $($paint.SKTypeface.FamilyName) lacks glyphs for $label."
+            }
+            Assert-True ($numbers.SKTypeface.ContainsGlyphs('0123456789') -and $numbers.SKTypeface.FamilyName -eq 'Segoe UI Variable Small') 'Numeric chart labels lost the requested typeface.'
+            if ($language -eq 'en') {
+                Assert-True ($paint.SKTypeface.FamilyName -eq 'Segoe UI Variable Small') 'Switching back to English retained the Chinese fallback.'
+            }
+        }
+        finally {
+            if ($paint) { $paint.Dispose() }
+            if ($numbers) { $numbers.Dispose() }
+            [LocalSecurityAudit.Services.AppText]::Current.SetLanguage($previousLanguage)
+        }
+    }
+}
+
 Write-Output "$script:passed passed; $script:failed failed. No network requests or user-data writes."
 if ($script:failed -gt 0) { exit 1 }

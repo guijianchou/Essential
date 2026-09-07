@@ -142,8 +142,8 @@ public sealed partial class TrendsPage : Page
                 MaxBarWidth = 18,
                 Rx = 3,
                 Ry = 3,
-                DataLabelsPaint = new SolidColorPaint(palette.InkPrimary) { FontFamily = ChartPalette.FontFamily },
-                DataLabelsSize = 12,
+                DataLabelsPaint = ChartPalette.TextPaint(palette.InkPrimary, localized: false),
+                DataLabelsSize = ChartPalette.TextSize,
                 DataLabelsPosition = DataLabelsPosition.End,
                 DataLabelsPadding = new Padding(8, 0, 0, 0),
                 DataLabelsFormatter = point => $"{point.Model:0}"
@@ -154,7 +154,7 @@ public sealed partial class TrendsPage : Page
             new Axis
             {
                 Labels = totals.Select(total => total.Name).ToList(),
-                TextSize = 12,
+                TextSize = ChartPalette.TextSize,
                 LabelsPaint = LabelPaint(palette),
                 SeparatorsPaint = null,
                 TicksPaint = null,
@@ -197,7 +197,7 @@ public sealed partial class TrendsPage : Page
         return new Axis
         {
             Labels = labels,
-            TextSize = 12,
+            TextSize = ChartPalette.TextSize,
             LabelsPaint = LabelPaint(palette),
             SeparatorsPaint = null,
             TicksPaint = null,
@@ -218,8 +218,8 @@ public sealed partial class TrendsPage : Page
             MaxLimit = maximum,
             MinStep = step,
             ForceStepToMin = true,
-            TextSize = 12,
-            LabelsPaint = LabelPaint(palette),
+            TextSize = ChartPalette.TextSize,
+            LabelsPaint = ChartPalette.TextPaint(palette.InkSecondary, localized: false),
             SeparatorsPaint = new SolidColorPaint(palette.Grid) { StrokeThickness = 1 },
             TicksPaint = null,
             Labeler = value => value.ToString("0")
@@ -228,16 +228,16 @@ public sealed partial class TrendsPage : Page
 
     private static SolidColorPaint LabelPaint(ChartPalette palette)
     {
-        return new SolidColorPaint(palette.InkSecondary) { FontFamily = ChartPalette.FontFamily };
+        return ChartPalette.TextPaint(palette.InkSecondary);
     }
 
     private static void ApplyChartChrome(CartesianChart chart, ChartPalette palette)
     {
         chart.LegendPosition = LegendPosition.Hidden;
         chart.TooltipPosition = TooltipPosition.Top;
-        chart.TooltipTextPaint = new SolidColorPaint(palette.InkPrimary) { FontFamily = ChartPalette.FontFamily };
+        chart.TooltipTextPaint = ChartPalette.TextPaint(palette.InkPrimary);
         chart.TooltipBackgroundPaint = new SolidColorPaint(palette.TooltipBackground);
-        chart.TooltipTextSize = 12;
+        chart.TooltipTextSize = ChartPalette.TextSize;
         chart.AnimationsSpeed = TimeSpan.FromMilliseconds(250);
     }
 

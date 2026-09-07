@@ -1,3 +1,6 @@
+using System;
+using LiveChartsCore.SkiaSharpView.Painting;
+using LocalSecurityAudit.Services;
 using Microsoft.UI.Xaml;
 using SkiaSharp;
 
@@ -20,7 +23,21 @@ public sealed record ChartPalette(
     SKColor SeriesWash,
     SKColor TooltipBackground)
 {
-    public const string FontFamily = "Segoe UI";
+    public const string FontFamily = "Segoe UI Variable Small";
+    public const double TextSize = 12;
+    private static readonly Lazy<SKTypeface> DefaultTypeface = new(() => SKTypeface.FromFamilyName(FontFamily));
+    private static readonly Lazy<SKTypeface> ChineseTypeface = new(() =>
+        SKFontManager.Default.MatchCharacter(FontFamily, SKFontStyle.Normal, new[] { "zh-CN" }, 0x4E2D)
+        ?? SKTypeface.FromFamilyName("Microsoft YaHei UI"));
+
+    public static SolidColorPaint TextPaint(SKColor color, bool localized = true)
+    {
+        // Skia labels use one typeface and do not inherit WinUI's CJK font fallback.
+        return new SolidColorPaint(color)
+        {
+            SKTypeface = localized && AppText.IsChinese ? ChineseTypeface.Value : DefaultTypeface.Value
+        };
+    }
 
     public static readonly ChartPalette Light = new(
         Surface: new SKColor(0xFB, 0xFB, 0xFB),

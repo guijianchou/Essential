@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Dispatching;
 using LocalSecurityAudit.Services;
@@ -34,7 +33,7 @@ public sealed partial class ScanStep : ObservableObject
         AuditStage.Analyze => "Bilingual analysis",
         AuditStage.Save => "Save results",
         AuditStage.Translate => "Historical translation",
-        _ => "Complete"
+        _ => "Finish"
     });
     public AuditStepState State => _progress.State;
     public bool IsActive => State == AuditStepState.Active;
@@ -50,7 +49,7 @@ public sealed partial class ScanStep : ObservableObject
     public bool HasBatchProgress => ShowText && _total > 0;
     public double Percent => _total == 0 ? 0 : 100d * _completed / _total;
     public string BatchText => AppText.Format("{0}/{1} batches", _completed, _total);
-    public double RowHeight => !ShowText ? 48 : Stage is AuditStage.Analyze or AuditStage.Translate ? 112 : 72;
+    public double RowHeight => ShowText ? 88 : 48;
 
     public bool Update(AuditProgressEventArgs progress)
     {
@@ -99,32 +98,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool isPaneOpen = true;
 
     [ObservableProperty]
-    private string workflowTitle = AppText.Get("Ready to scan");
+    private string workflowTitle = string.Empty;
 
+    public bool IsWorkflowVisible => _hasRun;
     public string SavedText => _savedAt.HasValue ? AppText.Format("Saved at {0:t}", _savedAt.Value) : string.Empty;
     public bool HasSavedResult => _savedAt.HasValue;
     public string PaneToggleText => AppText.Get(IsPaneOpen ? "Collapse sidebar" : "Expand sidebar");
-    public string PaneToggleGlyph => IsPaneOpen ? "\uE76B" : "\uE76C";
 
     public MainViewModel(AuditSchedulerService scheduler)
     {
         _scheduler = scheduler;
         _scheduler.AuditProgress += OnProgress;
         AppText.Current.LanguageChanged += OnLanguageChanged;
-    }
-
-    public async Task LoadSavedTimeAsync(DataStorageService storage)
-    {
-        try
-        {
-            var latest = await storage.GetLatestResultAsync();
-            if (!_hasRun && latest != null)
-            {
-                _savedAt = latest.Timestamp.ToLocalTime();
-                Refresh();
-            }
-        }
-        catch { /* The dashboard reports storage errors. */ }
     }
 
     private void OnProgress(object? sender, AuditProgressEventArgs progress)
@@ -141,6 +126,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _hasRun = true;
             _savedAt = null;
             foreach (var step in Steps) step.Reset();
+            OnPropertyChanged(nameof(IsWorkflowVisible));
         }
         if (!Steps[(int)progress.Stage].Update(progress)) return;
         if (progress.Stage == AuditStage.Save && progress.State == AuditStepState.Done)
@@ -152,7 +138,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         foreach (var step in Steps) step.ShowText = value;
         OnPropertyChanged(nameof(PaneToggleText));
-        OnPropertyChanged(nameof(PaneToggleGlyph));
     }
 
     private void OnLanguageChanged(object? sender, EventArgs e)
@@ -168,7 +153,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void Refresh()
     {
-        WorkflowTitle = AppText.Get(!_hasRun ? "Ready to scan"
+        WorkflowTitle = AppText.Get(!_hasRun ? string.Empty
             : Steps.Take(4).Any(step => step.IsFailed) ? "Scan failed"
             : Steps[(int)AuditStage.Translate].IsFailed ? "Translation pending"
             : _savedAt.HasValue ? "Scan saved" : "Scanning");
