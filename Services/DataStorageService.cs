@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using LocalSecurityAudit.Models;
@@ -150,6 +151,24 @@ public class DataStorageService
         return GetResultsAsync(today.AddDays(1 - Math.Max(1, days)).ToUniversalTime(), today.AddDays(1).ToUniversalTime());
     }
 
+    public async Task<Dictionary<DateTime, int>> GetRecentAuditDatesAsync(DateTime today)
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Timestamp FROM AuditResults WHERE Timestamp>=@start AND Timestamp<@end";
+        command.Parameters.AddWithValue("@start", today.AddDays(-6).ToUniversalTime());
+        command.Parameters.AddWithValue("@end", today.AddDays(1).ToUniversalTime());
+        using var reader = await command.ExecuteReaderAsync();
+        var dates = new Dictionary<DateTime, int>();
+        while (await reader.ReadAsync())
+        {
+            DateTime date = AsUtc(reader.GetDateTime(0)).ToLocalTime().Date;
+            dates[date] = dates.GetValueOrDefault(date) + 1;
+        }
+        return dates;
+    }
+
     public async Task<List<AuditResult>> GetResultsAsync(DateTime startUtc, DateTime endUtc)
     {
         using var connection = new SqliteConnection(_connectionString);
@@ -241,25 +260,62 @@ public class DataStorageService
         return Convert.ToInt32(await countCmd.ExecuteScalarAsync());
     }
 
-    public async Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> GetLegacyFindingsAsync()
+    public Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> GetLegacyFindingsAsync()
+        => ReadStoredFindingsAsync(true, CancellationToken.None);
+
+    public Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> GetOptimizationRecordsAsync(CancellationToken cancellationToken = default)
+        => ReadStoredFindingsAsync(false, cancellationToken);
+
+    private async Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> ReadStoredFindingsAsync(bool legacyOnly, CancellationToken cancellationToken)
     {
         using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT Id, FindingsJson FROM AuditResults ORDER BY Timestamp DESC";
-        using var reader = await command.ExecuteReaderAsync();
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var results = new List<(long, string, List<AuditIssue>)>();
-        while (await reader.ReadAsync())
+        while (await reader.ReadAsync(cancellationToken))
         {
             string json = reader.GetString(1);
             List<AuditIssue>? findings;
             try { findings = JsonSerializer.Deserialize<List<AuditIssue>>(json); }
             catch (JsonException) { continue; }
             if (findings == null || findings.Any(issue => issue == null)) continue;
-            if (findings.Any(issue => !issue.HasBilingualText))
+            if (!legacyOnly || findings.Any(issue => !issue.HasBilingualText))
                 results.Add((reader.GetInt64(0), json, findings));
         }
         return results;
+    }
+
+    public async Task<string?> UpdateOptimizedFindingsAsync(long id, string originalJson,
+        IReadOnlyDictionary<int, AuditIssue> updates, string model, CancellationToken cancellationToken = default)
+    {
+        if (updates.Count == 0 || JsonNode.Parse(originalJson) is not JsonArray stored) return null;
+        foreach (var (index, finding) in updates)
+        {
+            if (index < 0 || index >= stored.Count || stored[index] is not JsonObject original
+                || original.Deserialize<AuditIssue>() is not { } previous || !finding.HasBilingualText
+                || finding.AnalysisModel != model || !AiModelCatalog.CanOptimize(previous.AnalysisModel, model)) return null;
+            var reviewed = JsonSerializer.SerializeToNode(finding)!;
+            foreach (string property in new[] { nameof(AuditIssue.Title), nameof(AuditIssue.Description), nameof(AuditIssue.RootCause),
+                nameof(AuditIssue.Recommendation), nameof(AuditIssue.TitleZh), nameof(AuditIssue.DescriptionZh), nameof(AuditIssue.RootCauseZh),
+                nameof(AuditIssue.RecommendationZh), nameof(AuditIssue.Severity), nameof(AuditIssue.Confidence) })
+                original[property] = reviewed[property]?.DeepClone();
+            original[nameof(AuditIssue.AnalysisModel)] = model;
+            original[nameof(AuditIssue.OriginalAnalysisModel)] = previous.OptimizedAtUtc == null ? previous.AnalysisModel : previous.OriginalAnalysisModel;
+            original[nameof(AuditIssue.OptimizedAtUtc)] = JsonSerializer.SerializeToNode(DateTime.UtcNow);
+        }
+        string updatedJson = stored.ToJsonString();
+        int score = HealthScoreCalculator.Calculate(stored.Deserialize<List<AuditIssue>>()!).Score;
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE AuditResults SET FindingsJson=@updated, HealthScore=@score WHERE Id=@id AND FindingsJson=@original";
+        command.Parameters.AddWithValue("@updated", updatedJson);
+        command.Parameters.AddWithValue("@score", score);
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@original", originalJson);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1 ? updatedJson : null;
     }
 
     public async Task<bool> UpdateTranslatedFindingsAsync(long id, string originalJson, IReadOnlyList<AuditIssue> findings)

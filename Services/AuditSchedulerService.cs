@@ -297,6 +297,18 @@ public class AuditSchedulerService : IHostedService, IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             IsScanning = true;
             DateTime endTime = DateTime.UtcNow;
+            if (fastScan && _lastScanTime == DateTime.MinValue && _settingsService.Current.FastScanRangeHours == 0)
+            {
+                try
+                {
+                    var previous = await _storageService.GetLatestResultAsync();
+                    _lastScanTime = GetStoredScanEnd(previous, endTime);
+                }
+                catch (System.IO.InvalidDataException ex)
+                {
+                    _diagnosticLogService.WriteException("No readable scan cursor; using the initial fast-scan window", ex);
+                }
+            }
             DateTime startTime = GetScanStart(fastScan, endTime, _lastScanTime, _settingsService.Current);
 
             _diagnosticLogService.Write(
@@ -413,6 +425,83 @@ public class AuditSchedulerService : IHostedService, IDisposable
             : lastScanTime == DateTime.MinValue ? endTime.AddHours(-settings.ScanIntervalHours) : lastScanTime;
     }
 
+    internal static DateTime GetStoredScanEnd(AuditResult? result, DateTime now)
+    {
+        if (result?.Metadata?.TryGetValue("ScanEnd", out var value) == true
+            && value.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(value.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var end)
+            && end.ToUniversalTime() <= now && end > DateTime.MinValue)
+            return end.ToUniversalTime();
+        return DateTime.MinValue;
+    }
+
+    public async Task<int> OptimizeHistoryAsync(string model, IProgress<AuditProgressEventArgs>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (AiModelCatalog.Rank(model) < 0) throw new InvalidOperationException(AppText.Get("Select an explicit optimization model."));
+        await _auditGate.WaitAsync(cancellationToken);
+        Task<int> task;
+        try
+        {
+            await PauseHistoryTranslationAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_lifecycleLock)
+            {
+                if (_isStopping) throw new OperationCanceledException();
+                var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _cts?.Token ?? CancellationToken.None);
+                _historyCts = source;
+                // Share the historical-work lifetime: a new scan or app shutdown
+                // cancels optimization and waits for its current save to finish.
+                task = Task.Run(async () =>
+                {
+                    try { return await RunOptimizationAsync(model, progress, source.Token).ConfigureAwait(false); }
+                    finally
+                    {
+                        lock (_lifecycleLock)
+                        {
+                            if (ReferenceEquals(_historyCts, source)) _historyCts = null;
+                            source.Dispose();
+                        }
+                    }
+                });
+                _historyTask = task;
+            }
+        }
+        finally { _auditGate.Release(); }
+        return await task;
+    }
+
+    private async Task<int> RunOptimizationAsync(string model, IProgress<AuditProgressEventArgs>? progress, CancellationToken cancellationToken)
+    {
+        var records = await _storageService.GetOptimizationRecordsAsync(cancellationToken);
+        int total = records.Sum(record => record.Findings.Count(issue => AiModelCatalog.CanOptimize(issue.AnalysisModel, model)));
+        int completed = 0;
+        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Optimizing {0} findings with {1}", total, model) { TotalUnits = total });
+        foreach (var record in records)
+        {
+            string json = record.OriginalJson;
+            var indexes = Enumerable.Range(0, record.Findings.Count)
+                .Where(index => AiModelCatalog.CanOptimize(record.Findings[index].AnalysisModel, model)).Chunk(8);
+            foreach (var batch in indexes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var reviewed = await _aiAnalysisService.OptimizeFindingsAsync(batch.Select(index => record.Findings[index]).ToList(), model,
+                    new AuditProgressReporter(value => progress?.Report(new(value.Stage, value.State, value.MessageKey, value.Arguments)
+                    { CompletedUnits = completed, TotalUnits = total })), cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var updates = batch.Select((index, offset) => (index, finding: reviewed[offset])).ToDictionary(pair => pair.index, pair => pair.finding);
+                json = await _storageService.UpdateOptimizedFindingsAsync(record.Id, json, updates, model, cancellationToken)
+                    ?? throw new InvalidOperationException(AppText.Get("History changed during optimization. Reload before continuing."));
+                completed += batch.Length;
+                HistoryUpdated?.Invoke(this, EventArgs.Empty);
+                progress?.Report(new(AuditStage.Save, AuditStepState.Active, "Saved {0}/{1} optimized findings", completed, total)
+                { CompletedUnits = completed, TotalUnits = total });
+            }
+        }
+        return completed;
+    }
+
     private void ReportProgress(AuditProgressEventArgs progress)
     {
         if (progress.State == AuditStepState.Active && progress.Stage != AuditStage.Translate)
@@ -428,7 +517,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
             _historyCts?.Cancel();
             historyTask = _historyTask;
         }
-        if (historyTask != null) await historyTask.ConfigureAwait(false);
+        if (historyTask != null) await ObserveTaskAsync(historyTask).ConfigureAwait(false);
     }
 
     private void StartHistoryTranslation()

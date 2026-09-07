@@ -609,6 +609,8 @@ public sealed class SettingsService
             : Math.Clamp(settings.MaxConcurrentAnalysis, 2, 4);
 
         settings.AiTargets ??= new();
+        settings.OptimizationModel = AiModelCatalog.Rank(settings.OptimizationModel) >= 0
+            ? AiModelCatalog.Normalize(settings.OptimizationModel) : AiModelCatalog.Astra;
         if (settings.AiTargets.Count == 0)
         {
             settings.AiTargets.Add(new AiTargetSettings());
@@ -653,8 +655,7 @@ public sealed class SettingsService
             target.BaseUrl = target.BaseUrl?.Trim().TrimEnd('/') ?? "";
             target.ApiKey ??= "";
             target.Mode = target.Mode is "chat" or "responses" ? target.Mode : "responses";
-            // Only Luna is supported at the moment; the analysis pipeline is tuned to its 256k context.
-            target.Model = AiTargetSettings.LunaModel;
+            target.Model = AiModelCatalog.Normalize(target.Model);
             target.Effort = target.Effort is "low" or "medium" or "high" or "xhigh" or "max"
                 ? target.Effort
                 : "medium";

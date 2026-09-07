@@ -62,6 +62,14 @@ public class AuditIssueEnhanced
     public string RootCause { get; set; } = string.Empty;
     public string Recommendation { get; set; } = string.Empty;
     public bool NeedsTranslation { get; set; }
+    public string AnalysisModel { get; set; } = string.Empty;
+    public string OriginalAnalysisModel { get; set; } = string.Empty;
+    public DateTime? OptimizedAtUtc { get; set; }
+    public string ModelLabel => string.IsNullOrWhiteSpace(AnalysisModel) ? AppText.Get("Model unlabelled") : AnalysisModel;
+    public string ModelHistoryText => OptimizedAtUtc is { } optimized
+        ? AppText.Format("Optimized from {0} on {1}", string.IsNullOrWhiteSpace(OriginalAnalysisModel)
+            ? AppText.Get("Model unlabelled") : OriginalAnalysisModel, optimized.ToLocalTime().ToString("yyyy-MM-dd HH:mm", AppText.Culture))
+        : string.Empty;
     public string SeverityText => AppText.Get(SeverityLabel);
     public int Occurrences { get; set; } = 1;
     public List<string> RelatedEventRefs { get; set; } = new();

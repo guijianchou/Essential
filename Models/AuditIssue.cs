@@ -38,6 +38,9 @@ public class AuditIssue
     public string DescriptionZh { get; set; } = string.Empty;
     public string RootCauseZh { get; set; } = string.Empty;
     public string RecommendationZh { get; set; } = string.Empty;
+    public string AnalysisModel { get; set; } = string.Empty;
+    public string OriginalAnalysisModel { get; set; } = string.Empty;
+    public DateTime? OptimizedAtUtc { get; set; }
 
     [JsonIgnore]
     public bool HasBilingualText => !string.IsNullOrWhiteSpace(Title)

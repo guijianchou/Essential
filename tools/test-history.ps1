@@ -243,6 +243,7 @@ Test-Case 'Dashboard keeps its last successful display when storage or a scan fa
         $type.GetField('severityFilter', $flags).SetValue($model, 'All')
         $type.GetField('sourceFilter', $flags).SetValue($model, 'All')
         $model.FindingSections = [Collections.ObjectModel.ObservableCollection[LocalSecurityAudit.ViewModels.FindingSection]]::new()
+        $model.RecentDays = [Collections.Generic.List[LocalSecurityAudit.ViewModels.DashboardDay]]::new()
         $load = $type.GetMethod('LoadDataAsync', $flags)
         $load.Invoke($model, @()).GetAwaiter().GetResult()
         Assert-True ($model.HasAuditData -and $model.HealthScore -eq 85 -and -not $model.IsLoading) 'Automatic initial load failed.'
@@ -337,6 +338,77 @@ Test-Case 'Dashboard source tabs, summary counts and severity filters select the
     $model.SetSourceFilterCommand.Execute('All')
     $model.SetSeverityFilterCommand.Execute('All')
     Assert-True ($model.TotalFindings -eq 6 -and ($model.FindingSections | Measure-Object Count -Sum).Sum -eq 6) 'Returning to overview lost legacy findings without a source.'
+}
+
+Test-Case 'Dashboard days choose the latest readable scan on that local day and keep empty days empty' {
+    Use-HistoryDatabase {
+        param($storage, $connection)
+        $today = [datetime]::Today
+        Add-Record $connection $today '[{"Title":"Today","Severity":"Low"}]'
+        Add-Record $connection $today.AddDays(-1) '[{"Title":"Yesterday early","Severity":"Medium"}]'
+        Add-Record $connection $today.AddDays(-1).AddHours(10) '[{"Title":"Yesterday latest","Severity":"High"}]'
+        Add-Record $connection $today.AddDays(-1).AddHours(12) '[null]'
+        $type = $assembly.GetType('LocalSecurityAudit.ViewModels.DashboardViewModel', $true)
+        $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
+        $type.GetField('_storageService', $flags).SetValue($model, $storage)
+        $scheduler = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($assembly.GetType('LocalSecurityAudit.Services.AuditSchedulerService', $true))
+        $type.GetField('_schedulerService', $flags).SetValue($model, $scheduler)
+        $type.GetField('_allIssues', $flags).SetValue($model, [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssueEnhanced]]::new())
+        $type.GetField('severityFilter', $flags).SetValue($model, 'All')
+        $type.GetField('sourceFilter', $flags).SetValue($model, 'All')
+        $model.FindingSections = [Collections.ObjectModel.ObservableCollection[LocalSecurityAudit.ViewModels.FindingSection]]::new()
+        $model.RecentDays = [Collections.Generic.List[LocalSecurityAudit.ViewModels.DashboardDay]]::new()
+        $model.LoadDataCommand.ExecuteAsync($null).GetAwaiter().GetResult()
+        Assert-True ($model.RecentDays.Count -eq 7 -and $model.PriorityFindings[0].Title -eq 'Today') 'Week navigation changed the default latest audit.'
+        $week = $model.RecentDays
+        $yesterday = $model.RecentDays[5]
+        $model.SelectDayCommand.Execute($model.RecentDays[5])
+        $model.LoadDataCommand.ExecutionTask.GetAwaiter().GetResult()
+        Assert-True ($model.PriorityFindings[0].Title -eq 'Yesterday latest' -and $model.HighCount -eq 1 -and $model.RecentDays[5].IsSelected) 'Selected date did not load the latest readable record.'
+        Assert-True ([object]::ReferenceEquals($week, $model.RecentDays) -and [object]::ReferenceEquals($yesterday, $model.RecentDays[5])) 'Reloading replaced the date buttons and their keyboard focus.'
+        $model.SelectDayCommand.Execute($model.RecentDays[4])
+        $model.LoadDataCommand.ExecutionTask.GetAwaiter().GetResult()
+        Assert-True (-not $model.HasAuditData -and $model.TotalFindings -eq 0 -and $model.PriorityFindings.Count -eq 0) 'An empty day retained another day findings.'
+        $model.SelectDayCommand.Execute($model.RecentDays[5])
+        $older = $model.LoadDataCommand.ExecutionTask
+        $model.SelectDayCommand.Execute($model.RecentDays[6])
+        $newer = $model.LoadDataCommand.ExecutionTask
+        $newer.GetAwaiter().GetResult(); $older.GetAwaiter().GetResult()
+        Assert-True ($model.PriorityFindings[0].Title -eq 'Today' -and -not $model.IsDateLoading) 'A stale selection overwrote the current day.'
+        Add-Record $connection $today.AddDays(-1).AddHours(14) '[{"Title":"Another scan","Severity":"Low"}]'
+        $model.LoadDataCommand.ExecuteAsync($null).GetAwaiter().GetResult()
+        Assert-True ([object]::ReferenceEquals($yesterday, $model.RecentDays[5]) -and $yesterday.Scans -eq 4) 'Date counts did not update on the existing buttons.'
+        $command = $connection.CreateCommand()
+        $command.CommandText = 'DROP TABLE AuditResults'
+        $null = $command.ExecuteNonQuery()
+        $command.Dispose()
+        $model.SelectDayCommand.Execute($yesterday)
+        $model.LoadDataCommand.ExecutionTask.GetAwaiter().GetResult()
+        Assert-True (-not $model.HasAuditData -and $model.IsStatusVisible -and -not $model.IsDateLoading -and $model.SelectedAuditLabel -eq [LocalSecurityAudit.Services.AppText]::Format('Audit on {0:d}', $yesterday.Date)) 'A failed day selection retained another day or stayed loading.'
+    }
+}
+
+Test-Case 'Optimization saves only approved fields, recalculates score and refuses stale writes and downgrades' {
+    Use-HistoryDatabase {
+        param($storage, $connection)
+        $json = '[{"Key":"old","Title":"Old analysis","Description":"Old","RootCause":"Old cause","Recommendation":"Old action","Severity":"High","AnalysisModel":"gpt-5.6-luna","EventRecordId":"123","EventDescription":"Evidence","FutureField":{"keep":true}}]'
+        Add-Record $connection ([datetime]::Today) $json
+        $update = [LocalSecurityAudit.Models.AuditIssue]::new()
+        $update.Title = 'Reviewed'; $update.Description = 'Reviewed'; $update.RootCause = 'Reviewed'; $update.Recommendation = 'Reviewed'
+        $update.TitleZh = 'Reviewed zh'; $update.DescriptionZh = 'Reviewed zh'; $update.RootCauseZh = 'Reviewed zh'; $update.RecommendationZh = 'Reviewed zh'
+        $update.Severity = 'Low'; $update.Confidence = 'High'; $update.AnalysisModel = 'gpt-5.6-sol'; $update.EventRecordId = 'do-not-write'
+        $updates = [Collections.Generic.Dictionary[int,LocalSecurityAudit.Models.AuditIssue]]::new()
+        $updates.Add(0, $update)
+        $saved = $storage.UpdateOptimizedFindingsAsync(1, $json, $updates, 'gpt-5.6-sol', [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        Assert-True (-not [string]::IsNullOrEmpty($saved)) 'Upward optimization was not saved.'
+        $parsed = $saved | ConvertFrom-Json
+        Assert-True ($parsed[0].FutureField.keep -and $parsed[0].EventRecordId -eq '123' -and $parsed[0].EventDescription -eq 'Evidence' -and $parsed[0].OriginalAnalysisModel -eq 'gpt-5.6-luna') 'Unrelated evidence or original model was overwritten.'
+        $latest = $storage.GetLatestResultAsync().GetAwaiter().GetResult()
+        Assert-True ($latest.HealthScore -eq [LocalSecurityAudit.Services.HealthScoreCalculator]::Calculate($latest.Findings).Score) 'Stored score did not reflect optimized severity.'
+        Assert-True ($null -eq $storage.UpdateOptimizedFindingsAsync(1, $json, $updates, 'gpt-5.6-sol', [Threading.CancellationToken]::None).GetAwaiter().GetResult()) 'A stale result overwrote a concurrent update.'
+        $update.AnalysisModel = 'gpt-5.6-luna'
+        Assert-True ($null -eq $storage.UpdateOptimizedFindingsAsync(1, $saved, $updates, 'gpt-5.6-luna', [Threading.CancellationToken]::None).GetAwaiter().GetResult()) 'A lower model overwrote Sol.'
+    }
 }
 
 Write-Output "$script:passed passed; $script:failed failed. No app launch, network requests or user-data writes."

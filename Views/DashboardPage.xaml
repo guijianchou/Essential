@@ -39,6 +39,25 @@
                          IsClosable="True"
                          Closed="OnStatusBarClosed" />
 
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" HorizontalScrollMode="Enabled" VerticalScrollMode="Disabled">
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.RecentDays, Mode=OneWay}" AutomationProperties.Name="{Binding [Recentsevendays], Source={StaticResource AppText}}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DashboardDay">
+                                <ToggleButton Tag="{x:Bind}" Width="50" Height="58" Padding="0" CornerRadius="4" Click="OnDayClick"
+                                              IsChecked="{x:Bind IsSelected, Mode=OneWay}" AutomationProperties.Name="{x:Bind AccessibleLabel, Mode=OneWay}"
+                                              ToolTipService.ToolTip="{x:Bind AccessibleLabel, Mode=OneWay}">
+                                    <StackPanel Spacing="2" HorizontalAlignment="Center">
+                                        <TextBlock Text="{x:Bind WeekdayLabel}" FontSize="10" HorizontalAlignment="Center" />
+                                        <TextBlock Text="{x:Bind DayLabel}" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                        <Rectangle Width="14" Height="2" RadiusX="1" RadiusY="1" Fill="{ThemeResource AccentFillColorDefaultBrush}" Opacity="{x:Bind MarkerOpacity, Mode=OneWay}" />
+                                    </StackPanel>
+                                </ToggleButton>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+                <StackPanel x:Name="DashboardContent" Spacing="16">
                 <!-- Health score and latest audit -->
                 <Grid ColumnDefinitions="3*,2*" ColumnSpacing="16">
                     <Border Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Healthscore], Source={StaticResource AppText}}">
@@ -71,7 +90,7 @@
 
                     <Border Grid.Column="1" Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Latestaudit], Source={StaticResource AppText}}">
                         <Grid RowDefinitions="Auto,*" RowSpacing="12">
-                            <TextBlock Text="{Binding [Latestaudit], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                            <TextBlock Text="{x:Bind ViewModel.SelectedAuditLabel, Mode=OneWay}" Style="{StaticResource CaptionStrongTextStyle}" />
                             <Grid Grid.Row="1" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="24" RowSpacing="9" VerticalAlignment="Top">
                                 <TextBlock Grid.Row="0" Text="{Binding [Scan], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
                                 <TextBlock Grid.Row="0" Grid.Column="1" Text="{x:Bind ViewModel.ScanTypeText, Mode=OneWay}" Style="{StaticResource BodySmallTextStyle}" TextAlignment="Right" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
@@ -167,6 +186,7 @@
                                                             <TextBlock Grid.Column="1" Text="{x:Bind CategoryLabel}" Style="{StaticResource CaptionTextStyle}" />
                                                             <TextBlock Grid.Column="2" Text="{x:Bind EventTimestampText}" Style="{StaticResource CaptionTextStyle}" />
                                                         </Grid>
+                                                        <TextBlock Text="{x:Bind ModelLabel}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                                                         <TextBlock Text="{x:Bind DisplayTitle}" Style="{StaticResource BodyStrongTextStyle}" TextWrapping="Wrap" TextTrimming="None" />
                                                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" RowDefinitions="Auto,Auto,Auto" RowSpacing="3">
                                                             <TextBlock Text="{Binding [Why], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
@@ -243,6 +263,7 @@
                                                                         <TextBlock Grid.Column="2" Text="{x:Bind EventTimestampText}" Style="{StaticResource CaptionTextStyle}" />
                                                                     </Grid>
                                                                     <TextBlock Text="{x:Bind DisplayTitle}" Style="{StaticResource BodyStrongTextStyle}" TextWrapping="Wrap" TextTrimming="None" />
+                                                                    <TextBlock Text="{x:Bind ModelLabel}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                                                                     <TextBlock Text="{x:Bind DisplayDescription}" Style="{StaticResource BodySmallTextStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="{x:Bind HasDisplayDescription, Converter={StaticResource BoolToVisibilityConverter}}" />
                                                                     <Grid ColumnDefinitions="52,*" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="4" Margin="0,2,0,0">
                                                                         <TextBlock Grid.Row="0" Text="{Binding [Cause], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" Visibility="{x:Bind HasRootCause, Converter={StaticResource BoolToVisibilityConverter}}" />
@@ -283,6 +304,7 @@
                         </StackPanel>
                     </StackPanel>
                 </Border>
+                </StackPanel>
             </StackPanel>
         </ScrollViewer>
     </Grid>

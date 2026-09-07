@@ -8,12 +8,14 @@ public class ModelToIndexConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, string language)
     {
-        // Only Luna is supported at the moment, so every stored value maps to the single entry.
+        for (int i = 0; i < AiModelCatalog.Models.Count; i++)
+            if (string.Equals(value as string, AiModelCatalog.Models[i], StringComparison.OrdinalIgnoreCase)) return i;
         return 0;
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, string language)
     {
-        return AiTargetSettings.LunaModel;
+        return value is int index && index >= 0 && index < AiModelCatalog.Models.Count
+            ? AiModelCatalog.Models[index] : AiTargetSettings.LunaModel;
     }
 }

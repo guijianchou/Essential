@@ -35,7 +35,7 @@
                       Padding="32,8,32,32"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
-            <StackPanel Spacing="16">
+            <StackPanel x:Name="TrendContent" Spacing="16">
                 <InfoBar IsOpen="{x:Bind ViewModel.IsStatusVisible, Mode=TwoWay}"
                          Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}"
                          Message="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
@@ -123,14 +123,16 @@
                         <StackPanel Spacing="2">
                             <TextBlock Text="{Binding [Findingsbycategory], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
                         </StackPanel>
+                        <Grid Height="300">
                         <lvc:CartesianChart x:Name="CategoryChart"
                                             Height="{x:Bind ViewModel.CategoryChartHeight, Mode=OneWay}"
                                             Visibility="{x:Bind ViewModel.HasData, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                                             AutomationProperties.Name="{Binding [Findingsbycategorychart], Source={StaticResource AppText}}" />
                         <TextBlock Text="{Binding [Noscansinthisperiod], Source={StaticResource AppText}}"
                                    Style="{StaticResource CaptionTextStyle}"
-                                   Padding="0,12"
+                                   Padding="0,12" VerticalAlignment="Center"
                                    Visibility="{x:Bind ViewModel.HasData, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
+                        </Grid>
                     </StackPanel>
                 </Border>
 
@@ -165,6 +167,7 @@
                                                 <TextBlock Grid.Column="1" Text="{x:Bind ScanText}" Style="{StaticResource CaptionTextStyle}" />
                                             </Grid>
                                             <TextBlock Text="{x:Bind Issue.DisplayTitle}" Style="{StaticResource BodyStrongTextStyle}" TextWrapping="Wrap" MaxLines="2" />
+                                            <TextBlock Text="{x:Bind Issue.ModelLabel}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                                             <TextBlock Text="{x:Bind Issue.PriorityActionText}" Style="{StaticResource CaptionTextStyle}" TextTrimming="CharacterEllipsis" />
                                             <TextBlock Text="{x:Bind Issue.EvidenceSummaryText}" Style="{StaticResource CaptionTextStyle}" TextTrimming="CharacterEllipsis" />
                                         </StackPanel>

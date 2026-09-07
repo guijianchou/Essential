@@ -30,7 +30,6 @@ public sealed partial class AiAnalysisService
     private const int MinBatchSize = 20;
     private const int MaxBatchSize = 50;
     private const int ConnectionTestTimeoutSeconds = 15;
-    private const int LunaContextWindowTokens = 256_000;
     private const int ResponseOutputTokenBudget = 8_000;
     private const int ContextSafetyMarginTokens = 8_000;
     private const int MaxAgentInstructionChars = 32_000;
@@ -91,7 +90,7 @@ public sealed partial class AiAnalysisService
 
         // Calculate dynamic batch size
         int batchSize = CalculateDynamicBatchSize(filteredEvents, mainTarget.Effort ?? "medium",
-            LunaContextWindowTokens - ResponseOutputTokenBudget - ContextSafetyMarginTokens);
+            AiModelCatalog.ContextWindowTokens - ResponseOutputTokenBudget - ContextSafetyMarginTokens);
 
         int totalBatches = (int)Math.Ceiling(filteredEvents.Count / (double)batchSize);
         string systemPrompt = BuildSystemPrompt();
@@ -272,6 +271,11 @@ public sealed partial class AiAnalysisService
             throw new InvalidOperationException(AppText.Get("The AI response did not contain a valid findings result. Run the scan again."), ex);
         }
 
+        foreach (var issue in issues)
+        {
+            issue.AnalysisModel = response.Model;
+            issue.OriginalAnalysisModel = response.Model;
+        }
         return NormalizeIssues(issues, events);
     }
 
@@ -442,7 +446,7 @@ public sealed partial class AiAnalysisService
                     requestTimeoutCts.Token);
                 _diagnosticLogService.Write(
                     $"AI request response: endpoint={endpoint}, status={(int)response.StatusCode}, streaming={payload.IsStreaming}, streamEvents={payload.StreamEventCount}, responseChars={payload.Text.Length}, elapsedMs={stopwatch.ElapsedMilliseconds}");
-                return payload;
+                return payload with { Model = target.Model };
             }
             catch (Exception ex)
             {
@@ -931,9 +935,7 @@ public sealed partial class AiAnalysisService
 
     private static int GetContextWindowTokens(string model)
     {
-        return model.Contains("luna", StringComparison.OrdinalIgnoreCase)
-            ? LunaContextWindowTokens
-            : 128_000;
+        return AiModelCatalog.ContextWindowTokens;
     }
 
     private static int EstimateTokenCount(string value)
@@ -1276,7 +1278,7 @@ public sealed partial class AiAnalysisService
             $"AI route failover: from={failedRoute}, to={routes[1].Name}, reason={reason}");
     }
 
-    private static bool ShouldFailover(int statusCode) => statusCode >= 500 || statusCode == 408 || statusCode == 429;
+    private static bool ShouldFailover(int statusCode) => statusCode >= 500 || statusCode is 404 or 408 or 429;
 
     private static bool IsFailoverException(Exception exception) => exception is AiResponseException responseError
         ? responseError.AllowFailover
@@ -1467,6 +1469,9 @@ public sealed partial class AiAnalysisService
         DescriptionZh = issue.DescriptionZh,
         RootCauseZh = issue.RootCauseZh,
         RecommendationZh = issue.RecommendationZh,
+        AnalysisModel = issue.AnalysisModel,
+        OriginalAnalysisModel = issue.OriginalAnalysisModel,
+        OptimizedAtUtc = issue.OptimizedAtUtc,
         Occurrences = issue.Occurrences,
         RelatedEventRefs = issue.RelatedEventRefs.ToList(),
         DetectedAt = issue.DetectedAt
@@ -1496,6 +1501,7 @@ public sealed partial class AiAnalysisService
         string Mode)
     {
         public bool IsSuccessStatusCode => StatusCode is >= 200 and <= 299;
+        public string Model { get; init; } = string.Empty;
     }
 
     private sealed class AiResponseException : HttpRequestException

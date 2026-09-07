@@ -45,6 +45,7 @@
                            MaxLines="3" TextTrimming="CharacterEllipsis" IsTextSelectionEnabled="True" />
                 <TextBlock Text="{x:Bind Issue.EvidenceSummaryText}" FontSize="12" TextWrapping="Wrap" MaxLines="2"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Text="{x:Bind Issue.ModelLabel}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding [Pendingbilingualconversion], Source={StaticResource AppText}}" FontSize="12"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            Visibility="{x:Bind Issue.NeedsTranslation, Converter={StaticResource BoolToVisibilityConverter}}" />

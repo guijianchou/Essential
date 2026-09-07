@@ -54,6 +54,10 @@ public sealed partial class DashboardPage : Page
         {
             ApplyHealthPresentation();
         }
+        else if (e.PropertyName == nameof(DashboardViewModel.IsDateLoading))
+        {
+            ContentMotion.SetLoading(DashboardContent, ViewModel.IsDateLoading);
+        }
     }
 
     /// <summary>
@@ -91,6 +95,15 @@ public sealed partial class DashboardPage : Page
         if (sender is ToggleButton button && button.Tag is string filter)
         {
             ViewModel.SetSeverityFilterCommand.Execute(filter);
+            button.IsChecked = true;
+        }
+    }
+
+    private void OnDayClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton { Tag: DashboardDay day } button)
+        {
+            ViewModel.SelectDayCommand.Execute(day);
             button.IsChecked = true;
         }
     }

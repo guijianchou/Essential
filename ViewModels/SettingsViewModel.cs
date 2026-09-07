@@ -23,6 +23,7 @@ public partial class SettingsViewModel : ObservableObject
     private readonly SettingsService _settingsService;
     private readonly AiAnalysisService _aiAnalysisService;
     private readonly DiagnosticLogService _diagnosticLogService;
+    private readonly AuditSchedulerService _schedulerService;
     private readonly DispatcherQueue? _dispatcherQueue;
 
     [ObservableProperty]
@@ -108,12 +109,14 @@ public partial class SettingsViewModel : ObservableObject
         DataStorageService storageService,
         SettingsService settingsService,
         AiAnalysisService aiAnalysisService,
-        DiagnosticLogService diagnosticLogService)
+        DiagnosticLogService diagnosticLogService,
+        AuditSchedulerService schedulerService)
     {
         _storageService = storageService;
         _settingsService = settingsService;
         _aiAnalysisService = aiAnalysisService;
         _diagnosticLogService = diagnosticLogService;
+        _schedulerService = schedulerService;
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
         AiTargets.CollectionChanged += OnTargetsCollectionChanged;
@@ -122,6 +125,7 @@ public partial class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(VersionText));
             UpdatePipelineSummary();
             UpdatePolicyStatus(AgentInstructions);
+            _ = RefreshOptimizationPreviewAsync();
         };
         LoadFromSettings(_settingsService.Current);
         _ = UpdateDatabaseStatsAsync();
@@ -130,7 +134,7 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveSettingsAsync()
     {
-        if (IsBusy)
+        if (IsBusy || IsOptimizing)
         {
             return;
         }
@@ -450,7 +454,7 @@ public partial class SettingsViewModel : ObservableObject
                 ? AppText.Get("fallback empty")
                 : AppText.Format("fallback {0}", fallback.BaseUrl);
             ActiveTargetSummary = $"{target.Name}: {host}, {key}; {fallbackSummary}";
-            PipelineAnalyzeText = AppText.Format("Luna ({0}) at {1} via streaming {2}, reasoning effort {3}, 256k context; failover uses the optional fallback route.", target.Model, host, route, target.Effort);
+            PipelineAnalyzeText = AppText.Format("{0} at {1} via streaming {2}, reasoning effort {3}, 256k context; failover uses the optional fallback route.", target.Model, host, route, target.Effort);
         }
 
         PipelineParseText = AppText.Get("English and Chinese analysis are validated together. Categories and severities are normalized, repeated patterns are merged.");
@@ -496,6 +500,7 @@ public partial class SettingsViewModel : ObservableObject
         ScanCompleteNotification = settings.ScanCompleteNotification;
         DiagnosticLoggingEnabled = settings.DiagnosticLoggingEnabled;
         AgentInstructions = settings.AgentInstructions;
+        OptimizationModel = settings.OptimizationModel;
         UpdatePolicyStatus(AgentInstructions);
 
         LoadTargets(settings.AiTargets);
@@ -569,6 +574,7 @@ public partial class SettingsViewModel : ObservableObject
             MaxConcurrentAnalysis = _settingsService.Current.MaxConcurrentAnalysis,
             EnableSmartFiltering = _settingsService.Current.EnableSmartFiltering,
             EnableCaching = _settingsService.Current.EnableCaching,
+            OptimizationModel = OptimizationModel,
             AiTargets = AiTargets.Select(target => new AiTargetSettings
             {
                 Name = target.Name,

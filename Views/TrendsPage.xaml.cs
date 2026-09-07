@@ -22,6 +22,7 @@ namespace LocalSecurityAudit.Views;
 public sealed partial class TrendsPage : Page
 {
     private bool _isFindingDialogOpen;
+    private string _chartLanguage = string.Empty;
     public TrendsViewModel ViewModel { get; }
 
     public TrendsPage()
@@ -59,12 +60,16 @@ public sealed partial class TrendsPage : Page
     {
         if (e.PropertyName == nameof(TrendsViewModel.TrendDays))
         {
-            ConfigureCharts();
+            UpdateChartData();
             ApplyTrendDot();
         }
         else if (e.PropertyName == nameof(TrendsViewModel.TrendBand))
         {
             ApplyTrendDot();
+        }
+        else if (e.PropertyName == nameof(TrendsViewModel.IsLoading))
+        {
+            ContentMotion.SetLoading(TrendContent, ViewModel.IsLoading);
         }
     }
 
@@ -88,6 +93,7 @@ public sealed partial class TrendsPage : Page
 
     private void ConfigureCharts()
     {
+        _chartLanguage = AppText.Current.Language;
         var palette = ChartPalette.For(ActualTheme);
         var days = ViewModel.TrendDays;
         var labels = days.Select(day => day.Label).ToList();
@@ -181,6 +187,40 @@ public sealed partial class TrendsPage : Page
         ApplyChartChrome(CategoryChart, palette);
     }
 
+    private void UpdateChartData()
+    {
+        if (_chartLanguage != AppText.Current.Language)
+        {
+            ConfigureCharts();
+            return;
+        }
+        var days = ViewModel.TrendDays;
+        var columns = FindingsChart.Series.Cast<StackedColumnSeries<double>>().ToArray();
+        columns[0].Values = days.Select(day => (double)day.High).ToArray();
+        columns[1].Values = days.Select(day => (double)day.Medium).ToArray();
+        columns[2].Values = days.Select(day => (double)day.Low).ToArray();
+        ((LineSeries<double?>)HealthChart.Series.First()).Values = days.Select(day => day.HasData ? day.Health : null).ToArray();
+        var labels = days.Select(day => day.Label).ToList();
+        foreach (var chart in new[] { FindingsChart, HealthChart })
+        {
+            var axis = (Axis)chart.XAxes.First();
+            axis.Labels = labels;
+            axis.MinStep = labels.Count > 7 ? Math.Ceiling(labels.Count / 6d) : 1;
+            axis.MaxLimit = Math.Max(0, labels.Count - 1) + 0.5;
+        }
+        var (maximum, step) = NiceAxis(days.Count == 0 ? 0 : days.Max(day => day.Total));
+        var findingsAxis = (Axis)FindingsChart.YAxes.First();
+        findingsAxis.MaxLimit = maximum;
+        findingsAxis.MinStep = step;
+        var totals = ViewModel.CategoryTotals.OrderBy(total => total.Count).ThenByDescending(total => total.Name).ToList();
+        ((RowSeries<double>)CategoryChart.Series.First()).Values = totals.Select(total => (double)total.Count).ToArray();
+        ((Axis)CategoryChart.YAxes.First()).Labels = totals.Select(total => total.Name).ToList();
+        var (categoryMax, categoryStep) = NiceAxis(totals.Count == 0 ? 0 : totals.Max(total => total.Count));
+        var categoryAxis = (Axis)CategoryChart.XAxes.First();
+        categoryAxis.MaxLimit = categoryMax;
+        categoryAxis.MinStep = categoryStep;
+    }
+
     private static StackedColumnSeries<double> StackedColumn(string name, double[] values, SkiaSharp.SKColor color)
     {
         return new StackedColumnSeries<double>
@@ -241,7 +281,7 @@ public sealed partial class TrendsPage : Page
         chart.TooltipTextPaint = ChartPalette.TextPaint(palette.InkPrimary);
         chart.TooltipBackgroundPaint = new SolidColorPaint(palette.TooltipBackground);
         chart.TooltipTextSize = ChartPalette.TextSize;
-        chart.AnimationsSpeed = TimeSpan.FromMilliseconds(250);
+        chart.AnimationsSpeed = TimeSpan.FromMilliseconds(new Windows.UI.ViewManagement.UISettings().AnimationsEnabled ? 200 : 0);
     }
 
     /// <summary>Rounds an axis maximum to a clean step so gridlines land on whole numbers.</summary>

@@ -60,6 +60,8 @@ public sealed partial class SettingsPage : Page
     private void ShowSection(string tag)
     {
         AiPage.Visibility = tag == "ai" ? Visibility.Visible : Visibility.Collapsed;
+        OptimizationPage.Visibility = tag == "optimization" ? Visibility.Visible : Visibility.Collapsed;
+        if (tag == "optimization") _ = ViewModel.RefreshOptimizationPreviewCommand.ExecuteAsync(null);
         AppearancePage.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         ScanningPage.Visibility = tag == "scanning" ? Visibility.Visible : Visibility.Collapsed;
         StoragePage.Visibility = tag == "storage" ? Visibility.Visible : Visibility.Collapsed;

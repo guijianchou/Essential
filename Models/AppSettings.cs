@@ -17,6 +17,7 @@ public sealed class AppSettings
     public bool DiagnosticLoggingEnabled { get; set; }
     public string AgentInstructions { get; set; } = "";
     public List<AiTargetSettings> AiTargets { get; set; } = new();
+    public string OptimizationModel { get; set; } = AiModelCatalog.Astra;
     public int MaxConcurrentAnalysis { get; set; } = 3;
     public bool EnableSmartFiltering { get; set; } = true;
     public bool EnableCaching { get; set; } = true;

@@ -24,6 +24,8 @@ public sealed partial class FindingDetailsDialog : ContentDialog
     public FindingDetailsDialog(AuditIssueEnhanced issue, XamlRoot root, ElementTheme theme)
     {
         Issue = issue;
+        AddEvidence("Analysis model", issue.ModelLabel);
+        AddEvidence("Optimization", issue.ModelHistoryText);
         AddEvidence("Event ID", issue.EventId);
         AddEvidence("Log", issue.LogName);
         AddEvidence("Source", issue.Source);

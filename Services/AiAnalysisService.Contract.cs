@@ -505,6 +505,9 @@ public sealed partial class AiAnalysisService
 
             if (mergeKey != null && byKey.TryGetValue(mergeKey, out var existing))
             {
+                bool newer = issue.DetectedAt > existing.DetectedAt;
+                bool replaceAnalysis = AiModelCatalog.CanOptimize(existing.AnalysisModel, issue.AnalysisModel)
+                    || (string.Equals(existing.AnalysisModel, issue.AnalysisModel, StringComparison.OrdinalIgnoreCase) && newer);
                 existing.Occurrences += Math.Max(1, issue.Occurrences);
                 foreach (string relatedRef in issue.RelatedEventRefs)
                 {
@@ -524,7 +527,7 @@ public sealed partial class AiAnalysisService
                     existing.Confidence = issue.Confidence;
                 }
 
-                if (issue.DetectedAt > existing.DetectedAt)
+                if (newer)
                 {
                     existing.EventRef = issue.EventRef;
                     existing.EventId = issue.EventId;
@@ -536,6 +539,11 @@ public sealed partial class AiAnalysisService
                     existing.EventAdditionalData = issue.EventAdditionalData;
                     existing.UserName = issue.UserName;
                     existing.IpAddress = issue.IpAddress;
+                    existing.DetectedAt = issue.DetectedAt;
+                }
+
+                if (replaceAnalysis)
+                {
                     existing.Title = issue.Title;
                     existing.Description = issue.Description;
                     existing.RootCause = issue.RootCause;
@@ -544,7 +552,9 @@ public sealed partial class AiAnalysisService
                     existing.DescriptionZh = issue.DescriptionZh;
                     existing.RootCauseZh = issue.RootCauseZh;
                     existing.RecommendationZh = issue.RecommendationZh;
-                    existing.DetectedAt = issue.DetectedAt;
+                    existing.AnalysisModel = issue.AnalysisModel;
+                    existing.OriginalAnalysisModel = issue.OriginalAnalysisModel;
+                    existing.OptimizedAtUtc = issue.OptimizedAtUtc;
                 }
 
                 if (string.IsNullOrWhiteSpace(existing.Affected))

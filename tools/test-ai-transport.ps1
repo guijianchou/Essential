@@ -46,6 +46,7 @@ public sealed class TransportEndpoint : IDisposable
     private readonly Task worker;
     private int requestCount;
     public int RequestCount => Volatile.Read(ref requestCount);
+    public ConcurrentQueue<string> RequestBodies { get; } = new ConcurrentQueue<string>();
     public TaskCompletionSource<bool> FirstRequest { get; } = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
     public string Url { get; }
 
@@ -87,12 +88,15 @@ public sealed class TransportEndpoint : IDisposable
                 int remaining = int.Parse(lengthLine.Split(':')[1]);
                 if (remaining > 1048576) throw new InvalidOperationException("Unexpected test request size.");
                 var buffer = new byte[4096];
+                using var requestBody = new MemoryStream();
                 while (remaining > 0)
                 {
                     int read = await stream.ReadAsync(buffer.AsMemory(0, Math.Min(remaining, buffer.Length)), stop.Token);
                     if (read == 0) return;
+                    requestBody.Write(buffer, 0, read);
                     remaining -= read;
                 }
+                RequestBodies.Enqueue(Encoding.UTF8.GetString(requestBody.ToArray()));
 
                 int index = Interlocked.Increment(ref requestCount) - 1;
                 FirstRequest.TrySetResult(true);
@@ -134,7 +138,7 @@ function Test-Case([string]$Name, [scriptblock]$Action) {
     catch { $script:failed++; Write-Output "FAIL $Name`: $($_.Exception.GetBaseException().Message)" }
 }
 
-function New-Analysis($Main, $Fallback = $null, [int]$Parallel = 1) {
+function New-Analysis($Main, $Fallback = $null, [int]$Parallel = 1, [string]$MainModel = 'gpt-5.6-luna', [string]$FallbackModel = 'gpt-5.6-luna') {
     $settingsType = $assembly.GetType('LocalSecurityAudit.Services.SettingsService', $true)
     $settingsService = [System.Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($settingsType)
     $settings = [LocalSecurityAudit.Models.AppSettings]::new()
@@ -148,6 +152,7 @@ function New-Analysis($Main, $Fallback = $null, [int]$Parallel = 1) {
         $target = [LocalSecurityAudit.Models.AiTargetSettings]::new()
         $target.Name = if ($endpoint -eq $Main) { 'Main' } else { 'Fallback' }
         $target.BaseUrl = $endpoint.Url
+        $target.Model = if ($endpoint -eq $Main) { $MainModel } else { $FallbackModel }
         $settings.AiTargets.Add($target)
     }
     $settingsType.GetProperty('Current').SetValue($settingsService, $settings)
@@ -294,6 +299,125 @@ Test-Case 'Slow headers show elapsed progress and still complete normally' {
         Assert-True (@($progress.Events | Where-Object MessageKey -Like '*headers*').Count -ge 1) 'Header wait had no elapsed progress.'
     }
     finally { $timeout.Dispose(); $endpoint.Dispose() }
+}
+
+function New-ReviewPayload([int]$Count = 1, [string]$Prefix = 'event-') {
+    $issues = @(for ($index = 0; $index -lt $Count; $index++) {
+        @{key="$Prefix$index"; eventRef="event-$index"; title='Reviewed finding'; description='Synthetic evidence'; rootCause='Cause uncertain'; recommendation='Verify evidence';
+          titleZh='Reviewed zh'; descriptionZh='Evidence zh'; rootCauseZh='Cause zh'; recommendationZh='Action zh'; severity='Low'; confidence='Medium'; category='System'}
+    })
+    return @{issues=$issues} | ConvertTo-Json -Compress -Depth 6
+}
+
+Test-Case 'Every supported model is sent as selected and labels generated findings' {
+    $reply = [TransportReply]::new()
+    $reply.Body = @{output_text=(New-ReviewPayload)} | ConvertTo-Json -Compress
+    $endpoint = [TransportEndpoint]::new(@($reply))
+    $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(8))
+    try {
+        foreach ($model in [LocalSecurityAudit.Models.AiModelCatalog]::Models) {
+            $service = New-Analysis $endpoint -MainModel $model
+            $result = $service.AnalyzeEventsAsync((New-Events), $null, $timeout.Token).GetAwaiter().GetResult()
+            Assert-True ($result.Item1.Count -eq 1 -and $result.Item1[0].AnalysisModel -eq $model -and $result.Item1[0].OriginalAnalysisModel -eq $model) 'Generated finding was labelled with another model.'
+        }
+        $requests = @($endpoint.RequestBodies | ForEach-Object { $_ | ConvertFrom-Json })
+        Assert-True (($requests.model -join ',') -eq ([LocalSecurityAudit.Models.AiModelCatalog]::Models -join ',')) 'Dispatch changed a selected model.'
+        Assert-True (@($requests | Where-Object { $_.reasoning.effort -ne 'medium' }).Count -eq 0) 'Dispatch changed reasoning effort.'
+    }
+    finally { $timeout.Dispose(); $endpoint.Dispose() }
+}
+
+Test-Case 'Findings record the actual fallback model when Main does not support its model' {
+    $notFound = [TransportReply]::new()
+    $notFound.Status = 404
+    $reply = [TransportReply]::new()
+    $reply.Body = @{output_text=(New-ReviewPayload)} | ConvertTo-Json -Compress
+    $main = [TransportEndpoint]::new(@($notFound))
+    $fallback = [TransportEndpoint]::new(@($reply))
+    $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+    try {
+        $service = New-Analysis $main $fallback -MainModel 'gpt-5.6-sol' -FallbackModel 'gpt-5.6-terra'
+        $result = $service.AnalyzeEventsAsync((New-Events), $null, $timeout.Token).GetAwaiter().GetResult()
+        Assert-True ($result.Item1[0].AnalysisModel -eq 'gpt-5.6-terra' -and $main.RequestCount -eq 1 -and $fallback.RequestCount -eq 1) 'Fallback ownership was attributed to Main.'
+    }
+    finally { $timeout.Dispose(); $main.Dispose(); $fallback.Dispose() }
+}
+
+Test-Case 'Optimization forces the selected model on fallback and blocks downward requests before dispatch' {
+    $notFound = [TransportReply]::new()
+    $notFound.Status = 404
+    $reply = [TransportReply]::new()
+    $reply.Body = @{output_text=(New-ReviewPayload -Prefix 'optimize_')} | ConvertTo-Json -Compress
+    $main = [TransportEndpoint]::new(@($notFound))
+    $fallback = [TransportEndpoint]::new(@($reply))
+    $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+    try {
+        $service = New-Analysis $main $fallback
+        $originals = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
+        $issue = [LocalSecurityAudit.Models.AuditIssue]::new()
+        $issue.AnalysisModel = 'gpt-5.6-sol'
+        $issue.EventDescription = 'Original evidence'
+        $originals.Add($issue)
+        Assert-TaskThrows ($service.OptimizeFindingsAsync($originals, 'gpt-5.6-luna', $null, $timeout.Token)) ([InvalidOperationException])
+        Assert-True ($main.RequestCount -eq 0) 'A downward optimization reached the endpoint.'
+        $result = $service.OptimizeFindingsAsync($originals, 'gpt-6-astra', $null, $timeout.Token).GetAwaiter().GetResult()
+        Assert-True ($result[0].AnalysisModel -eq 'gpt-6-astra' -and $result[0].OriginalAnalysisModel -eq 'gpt-5.6-sol' -and $result[0].EventDescription -eq 'Original evidence') 'Optimization lost model or evidence.'
+        $requests = @($main.RequestBodies) + @($fallback.RequestBodies)
+        Assert-True (@($requests | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.model -ne 'gpt-6-astra' }).Count -eq 0) 'Fallback downgraded the selected optimization model.'
+    }
+    finally { $timeout.Dispose(); $main.Dispose(); $fallback.Dispose() }
+}
+
+Test-Case 'Cancelling history optimization retains completed batches and a scan can resume' {
+    $directory = Split-Path -Parent $assembly.Location
+    $null = [Reflection.Assembly]::LoadFrom((Join-Path $directory 'Microsoft.Data.Sqlite.dll'))
+    $null = [Reflection.Assembly]::LoadFrom((Join-Path $directory 'SQLitePCLRaw.batteries_v2.dll'))
+    $null = [Runtime.InteropServices.NativeLibrary]::Load((Join-Path $directory 'runtimes/win-x64/native/e_sqlite3.dll'))
+    [SQLitePCL.Batteries_V2]::Init()
+    $reply = [TransportReply]::new()
+    $reply.Body = @{output_text=(New-ReviewPayload -Count 8 -Prefix 'optimize_')} | ConvertTo-Json -Compress
+    $hold = [TransportReply]::new()
+    $hold.HoldHeaders = $true
+    $endpoint = [TransportEndpoint]::new(@($reply, $hold))
+    $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(8))
+    $connectionString = "Data Source=optimization-$([guid]::NewGuid());Mode=Memory;Cache=Shared;Pooling=False"
+    $keeper = [Microsoft.Data.Sqlite.SqliteConnection]::new($connectionString)
+    $scheduler = $null
+    try {
+        $keeper.Open()
+        $storageType = $assembly.GetType('LocalSecurityAudit.Services.DataStorageService', $true)
+        $storage = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($storageType)
+        $storageType.GetField('_connectionString', $flags).SetValue($storage, $connectionString)
+        $storageType.GetMethod('InitializeDatabaseAsync', $flags).Invoke($storage, @()).GetAwaiter().GetResult()
+        $audit = [LocalSecurityAudit.Models.AuditResult]::new()
+        $audit.Timestamp = [datetime]::UtcNow
+        foreach ($index in 0..9) {
+            $finding = [LocalSecurityAudit.Models.AuditIssue]::new()
+            $finding.Key = "source-$index"; $finding.Title = "Original $index"; $finding.AnalysisModel = 'gpt-5.6-luna'
+            $finding.EventRecordId = "$index"; $finding.Severity = 'High'
+            $audit.Findings.Add($finding)
+        }
+        $storage.SaveAuditResultAsync($audit).GetAwaiter().GetResult()
+        $service = New-Analysis $endpoint
+        $serviceType = $service.GetType()
+        $settingsService = $serviceType.GetField('_settingsService', $flags).GetValue($service)
+        $logger = $serviceType.GetField('_diagnosticLogService', $flags).GetValue($service)
+        $scheduler = [LocalSecurityAudit.Services.AuditSchedulerService]::new($null, $service, $storage, $settingsService, $logger)
+        $task = $scheduler.OptimizeHistoryAsync('gpt-5.6-sol', $null, $timeout.Token)
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        while ($endpoint.RequestCount -lt 2 -and $timer.Elapsed.TotalSeconds -lt 4) { Start-Sleep -Milliseconds 20 }
+        Assert-True ($endpoint.RequestCount -eq 2) 'Optimization did not start its second batch.'
+        $timeout.Cancel()
+        Assert-TaskThrows $task ([OperationCanceledException])
+        $latest = $storage.GetLatestResultAsync().GetAwaiter().GetResult()
+        Assert-True (@($latest.Findings | Where-Object AnalysisModel -EQ 'gpt-5.6-sol').Count -eq 8) 'Completed optimization batches were lost or unfinished ones saved.'
+        Assert-True ($latest.Findings[9].Title -eq 'Original 9' -and $latest.Findings[0].EventRecordId -eq '0') 'Cancellation changed unreviewed text or source evidence.'
+        $scheduler.GetType().GetMethod('PauseHistoryTranslationAsync', $flags).Invoke($scheduler, @()).GetAwaiter().GetResult()
+    }
+    finally {
+        if ($scheduler) { $scheduler.StopAsync([Threading.CancellationToken]::None).GetAwaiter().GetResult(); $scheduler.Dispose() }
+        $timeout.Dispose(); $endpoint.Dispose(); $keeper.Dispose()
+    }
 }
 
 Write-Output "$script:passed passed; $script:failed failed. Loopback HTTP only; no user-data writes."

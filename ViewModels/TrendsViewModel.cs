@@ -75,7 +75,7 @@ public partial class TrendsViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string trendStatus = string.Empty;
     [ObservableProperty] private string trendDetailText = string.Empty;
     [ObservableProperty] private HealthBand trendBand = HealthBand.Good;
-    [ObservableProperty] private double categoryChartHeight = 160;
+    [ObservableProperty] private double categoryChartHeight = 300;
     [ObservableProperty] private int severityFilterIndex;
     [ObservableProperty] private string pageText = string.Empty;
     [ObservableProperty] private bool canGoBack;
@@ -125,8 +125,7 @@ public partial class TrendsViewModel : ObservableObject, IDisposable
         int version = ++_loadVersion;
         int days = WindowDays;
         var today = DateTime.Today;
-        // A newly selected period must never display the previous period's totals.
-        if (_loadedWindow != days || _loadedDate != today) ApplyResults(new(), days, today);
+        bool changingPeriod = _loadedWindow != days || _loadedDate != today;
         IsLoading = true;
         try
         {
@@ -140,6 +139,7 @@ public partial class TrendsViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             if (version != _loadVersion) return;
+            if (changingPeriod) ApplyResults(new(), days, today);
             StatusMessage = HasData
                 ? AppText.Get("History could not be updated. Showing the last available data for this period.")
                 : AppText.Format("Load failed: {0}", ex.Message);
@@ -191,7 +191,6 @@ public partial class TrendsViewModel : ObservableObject, IDisposable
         CategoryTotals = _findings.GroupBy(finding => finding.Issue.CategoryLabel)
             .Select(group => new CategoryTotal { Name = group.Key, Count = group.Count() })
             .OrderByDescending(total => total.Count).ThenBy(total => total.Name).ToList();
-        CategoryChartHeight = Math.Max(160, 36 * CategoryTotals.Count + 32);
         HasData = inWindow.Count > 0;
         PeriodText = days == 1
             ? AppText.Format("Today, {0:d} (local time)", today)

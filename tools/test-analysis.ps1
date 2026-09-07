@@ -819,5 +819,90 @@ Test-Case 'Workflow exposes confirmed percentages and resets only on a new scan'
     Assert-True ($model.WorkflowPercent -lt 100) 'Failed scan was presented as complete.'
 }
 
+Test-Case 'Supported models survive normalization and use 256k without changing effort' {
+    foreach ($model in [LocalSecurityAudit.Models.AiModelCatalog]::Models) {
+        $candidate = [LocalSecurityAudit.Models.AppSettings]::new()
+        $route = [LocalSecurityAudit.Models.AiTargetSettings]::new()
+        $route.Model = $model
+        $route.Effort = 'max'
+        $candidate.AiTargets.Add($route)
+        $null = $settingsType.GetMethod('Normalize', $privateFlags).Invoke($null, @($candidate))
+        Assert-True ($candidate.AiTargets[0].Model -eq $model -and $candidate.AiTargets[0].Effort -eq 'max') 'Normalization changed model or effort.'
+        Assert-True ((Invoke-AnalysisMethod 'GetContextWindowTokens' @([string]$model)) -eq 256000) 'Model context was not 256k.'
+    }
+}
+
+Test-Case 'Optimization allows only upward model transitions and protects unknown provenance' {
+    $models = [LocalSecurityAudit.Models.AiModelCatalog]::OptimizationModels
+    for ($source = 0; $source -lt $models.Count; $source++) {
+        for ($dest = 0; $dest -lt $models.Count; $dest++) {
+            Assert-True ([LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize($models[$source], $models[$dest]) -eq ($dest -gt $source)) 'A same-tier or downward transition was permitted.'
+        }
+    }
+    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize('', 'gpt-5.6-sol')) 'Unlabelled history could be downgraded.'
+    Assert-True ([LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize('', 'gpt-6-astra')) 'Legacy history cannot be optimized by Astra.'
+    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize('unknown-future-model', 'gpt-6-astra')) 'An unknown future model lost protection.'
+    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize('gpt-5.6-sol', 'gpt-5.6')) 'An ambiguous target bypassed the hierarchy.'
+}
+
+Test-Case 'Model ownership survives serialization, cache cloning, display and merging' {
+    $strong = New-BilingualFinding
+    $strong.AnalysisModel = 'gpt-5.6-sol'
+    $strong.OriginalAnalysisModel = 'gpt-5.6-luna'
+    $strong.OptimizedAtUtc = [datetime]::UtcNow
+    $strong.DetectedAt = [datetime]::UtcNow.AddHours(-1)
+    $copy = Invoke-AnalysisMethod 'CloneIssue' @($strong)
+    $display = [LocalSecurityAudit.Services.IssueCategorizer]::CategorizeIssue($copy)
+    Assert-True ($display.ModelLabel -eq 'gpt-5.6-sol' -and $display.ModelHistoryText.Contains('gpt-5.6-luna')) 'Display lost model provenance.'
+    $weaker = Invoke-AnalysisMethod 'CloneIssue' @($strong)
+    $weaker.AnalysisModel = 'gpt-5.6-luna'
+    $weaker.Title = 'Newer weaker interpretation'
+    $weaker.DetectedAt = [datetime]::UtcNow
+    $items = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
+    $items.Add($copy); $items.Add($weaker)
+    $merged = Invoke-AnalysisMethod 'MergeDuplicateIssues' @(,$items)
+    Assert-True ($merged.Count -eq 1 -and $merged[0].AnalysisModel -eq 'gpt-5.6-sol' -and $merged[0].Title -eq $strong.Title) 'Merging downgraded the interpretation.'
+    $json = [System.Text.Json.JsonSerializer]::Serialize($strong, $strong.GetType())
+    Assert-True ($json.Contains('gpt-5.6-sol') -and $json.Contains('OptimizedAtUtc')) 'Saved data has no model metadata.'
+}
+
+Test-Case 'Optimization validates all keys and keeps source evidence outside AI ownership' {
+    $original = New-BilingualFinding
+    $original.AnalysisModel = 'gpt-5.6-luna'
+    $original.EventRecordId = 'original-record'
+    $original.EventDescription = 'Original source evidence'
+    $review = New-BilingualFinding 'optimize_0'
+    $review.Title = 'Reviewed finding'
+    $review.Severity = 'Low'
+    $review.Confidence = 'Medium'
+    $review.EventRecordId = 'invented-record'
+    $originals = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
+    $originals.Add($original)
+    $reviews = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
+    $reviews.Add($review)
+    $result = Invoke-AnalysisMethod 'ApplyOptimizedFindings' @($originals, $reviews, 'gpt-5.6-sol')
+    Assert-True ($result[0].Title -eq 'Reviewed finding' -and $result[0].EventRecordId -eq 'original-record' -and $result[0].EventDescription -eq $original.EventDescription) 'Optimization overwrote evidence.'
+    Assert-True ($original.AnalysisModel -eq 'gpt-5.6-luna' -and $result[0].AnalysisModel -eq 'gpt-5.6-sol') 'Optimization mutated the input or omitted ownership.'
+    $review.Key = 'unexpected-key'
+    Assert-Throws { Invoke-AnalysisMethod 'ApplyOptimizedFindings' @($originals, $reviews, 'gpt-5.6-sol') } ([System.Text.Json.JsonException])
+    $review.Key = 'optimize_0'
+    $review.TitleZh = ''
+    Assert-Throws { Invoke-AnalysisMethod 'ApplyOptimizedFindings' @($originals, $reviews, 'gpt-5.6-sol') } ([System.Text.Json.JsonException])
+}
+
+Test-Case 'Incremental scan resumes at stored ScanEnd and rejects a future cursor' {
+    $schedulerType = $assembly.GetType('LocalSecurityAudit.Services.AuditSchedulerService', $true)
+    $now = [datetime]::UtcNow
+    $audit = [LocalSecurityAudit.Models.AuditResult]::new()
+    $audit.Timestamp = $now.AddMinutes(-2)
+    $audit.Metadata = [Collections.Generic.Dictionary[string,System.Text.Json.JsonElement]]::new()
+    $end = $now.AddHours(-1)
+    $audit.Metadata['ScanEnd'] = [System.Text.Json.JsonSerializer]::SerializeToElement($end.ToString('O'), [string])
+    $cursor = $schedulerType.GetMethod('GetStoredScanEnd', $privateFlags).Invoke($null, @($audit, $now))
+    Assert-True ($cursor -eq $end -and $cursor -ne $audit.Timestamp) 'Completion time skipped events collected while AI was working.'
+    $audit.Metadata['ScanEnd'] = [System.Text.Json.JsonSerializer]::SerializeToElement($now.AddDays(1).ToString('O'), [string])
+    Assert-True ($schedulerType.GetMethod('GetStoredScanEnd', $privateFlags).Invoke($null, @($audit, $now)) -eq [datetime]::MinValue) 'Future scan cursor was accepted.'
+}
+
 Write-Output "$script:passed passed; $script:failed failed. No network requests or user-data writes."
 if ($script:failed -gt 0) { exit 1 }
