@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -15,6 +16,7 @@ public sealed partial class ScanStep : ObservableObject
     private AuditProgressEventArgs _progress;
     private int _completed;
     private int _total;
+    private long _lastDetailUpdate;
 
     [ObservableProperty]
     private bool showText = true;
@@ -41,33 +43,49 @@ public sealed partial class ScanStep : ObservableObject
     public bool IsInactive => State is AuditStepState.Pending or AuditStepState.Skipped;
     public string InactiveGlyph => State == AuditStepState.Skipped ? "\uE738" : "\uEA3A";
     public bool HasConnector => Stage != AuditStage.Complete;
-    public string Detail => _progress.Message;
+    public bool HasCompletedConnector => HasConnector && IsDone;
+    public string Detail => _progress.BatchNumber > 0
+        ? AppText.Format("Batch {0}: {1}", _progress.BatchNumber, _progress.Message) : _progress.Message;
     public string Tooltip => $"{Title}: {Detail}";
     public bool HasBatchProgress => ShowText && _total > 0;
     public double Percent => _total == 0 ? 0 : 100d * _completed / _total;
     public string BatchText => AppText.Format("{0}/{1} batches", _completed, _total);
+    public double RowHeight => !ShowText ? 48 : Stage is AuditStage.Analyze or AuditStage.Translate ? 112 : 72;
 
-    public void Update(AuditProgressEventArgs progress)
+    public bool Update(AuditProgressEventArgs progress)
     {
+        if ((State is AuditStepState.Done or AuditStepState.Failed or AuditStepState.Skipped)
+            && progress.State == AuditStepState.Active) return false;
         // Concurrent requests can finish in a different order from their progress reports.
-        if (progress.TotalBatches > 0 && progress.CompletedBatches < _completed) return;
+        if (progress.TotalBatches > 0 && progress.CompletedBatches < _completed) return false;
+        long now = Stopwatch.GetTimestamp();
+        if (progress.State == AuditStepState.Active && State == progress.State && progress.TotalBatches == 0
+            && Stopwatch.GetElapsedTime(_lastDetailUpdate, now).TotalMilliseconds < 750) return false;
         _progress = progress;
         _completed = Math.Max(_completed, progress.CompletedBatches);
         _total = Math.Max(_total, progress.TotalBatches);
+        _lastDetailUpdate = now;
         Refresh();
+        return true;
     }
 
     public void Reset()
     {
         _completed = _total = 0;
+        _lastDetailUpdate = 0;
         _progress = new(Stage, AuditStepState.Pending, "Pending");
         Refresh();
     }
 
-    partial void OnShowTextChanged(bool value) => OnPropertyChanged(nameof(HasBatchProgress));
+    partial void OnShowTextChanged(bool value)
+    {
+        OnPropertyChanged(nameof(HasBatchProgress));
+        OnPropertyChanged(nameof(RowHeight));
+    }
     public void Refresh() => OnPropertyChanged(string.Empty);
 }
 
+[Microsoft.UI.Xaml.Data.Bindable]
 public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly AuditSchedulerService _scheduler;
@@ -124,7 +142,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _savedAt = null;
             foreach (var step in Steps) step.Reset();
         }
-        Steps[(int)progress.Stage].Update(progress);
+        if (!Steps[(int)progress.Stage].Update(progress)) return;
         if (progress.Stage == AuditStage.Save && progress.State == AuditStepState.Done)
             _savedAt = progress.Arguments.FirstOrDefault() is DateTime savedAt ? savedAt : DateTime.Now;
         Refresh();
@@ -139,8 +157,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnLanguageChanged(object? sender, EventArgs e)
     {
-        if (_dispatcher is { HasThreadAccess: false }) _dispatcher.TryEnqueue(Refresh);
-        else Refresh();
+        void RefreshLanguage()
+        {
+            foreach (var step in Steps) step.Refresh();
+            Refresh();
+        }
+        if (_dispatcher is { HasThreadAccess: false }) _dispatcher.TryEnqueue(RefreshLanguage);
+        else RefreshLanguage();
     }
 
     private void Refresh()
@@ -149,7 +172,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             : Steps.Take(4).Any(step => step.IsFailed) ? "Scan failed"
             : Steps[(int)AuditStage.Translate].IsFailed ? "Translation pending"
             : _savedAt.HasValue ? "Scan saved" : "Scanning");
-        foreach (var step in Steps) step.Refresh();
         OnPropertyChanged(nameof(SavedText));
         OnPropertyChanged(nameof(HasSavedResult));
         OnPropertyChanged(nameof(PaneToggleText));

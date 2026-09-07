@@ -398,5 +398,13 @@
   "English + Simplified Chinese": "英文 + 简体中文",
   "Pending": "等待中",
   "Not assessed": "未评估",
-  "No events were analyzed by AI.": "本次没有事件进入 AI 分析。"
+  "No events were analyzed by AI.": "本次没有事件进入 AI 分析。",
+  "Batch {0}: {1}": "第 {0} 批：{1}",
+  "{0} connected": "{0} 已连接",
+  "Validating {0} response": "正在校验 {0} 的分析结果",
+  "Waiting for {0} ({1:0}s)": "等待 {0} 输出（{1:0} 秒）",
+  "{0}: {1:N0} characters ({2:0}s)": "{0}：{1:N0} 字符（{2:0} 秒）",
+  "Connecting to {0}": "正在连接 {0}",
+  "Retrying {0} ({1}/{2})": "正在重试 {0}（{1}/{2}）",
+  "Historical translation could not be saved. It will retry after the next scan.": "历史补译未能保存，将在下次扫描后重试。"
 }

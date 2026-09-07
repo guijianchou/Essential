@@ -144,7 +144,8 @@ public sealed partial class AiAnalysisService
                     systemPrompt,
                     inputTokenBudget,
                     routeState,
-                    progress,
+                    new AuditProgressReporter(value => progress?.Report(new(value.Stage, value.State, value.MessageKey, value.Arguments)
+                    { BatchNumber = value.Stage == AuditStage.Analyze ? currentBatch : 0 })),
                     cancellationToken);
                 var issues = RemapIssuesToIndexes(
                     localIssues,
@@ -364,10 +365,15 @@ public sealed partial class AiAnalysisService
         string endpoint = useResponses ? "v1/responses" : "v1/chat/completions";
         _diagnosticLogService.Write(
             $"AI request dispatching: route={target.Name}, method=POST, endpoint={endpoint}, model={target.Model}, effort={target.Effort}");
+        int attempt = 0;
         return await RetryAsync(
             $"POST {endpoint}, model={target.Model}, effort={target.Effort}",
             async () =>
         {
+            attempt++;
+            progress?.Report(attempt == 1
+                ? new(AuditStage.Analyze, AuditStepState.Active, "Connecting to {0}", target.Name)
+                : new(AuditStage.Analyze, AuditStepState.Active, "Retrying {0} ({1}/{2})", target.Name, attempt, maxRetries));
             var stopwatch = Stopwatch.StartNew();
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
@@ -411,7 +417,7 @@ public sealed partial class AiAnalysisService
                         target.Mode);
                 }
 
-                progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "AI endpoint connected ({0}); receiving analysis...", target.Name));
+                progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "{0} connected", target.Name));
 
                 var payload = await ReadAnalysisResponseAsync(
                     response,
@@ -447,7 +453,7 @@ public sealed partial class AiAnalysisService
         if (!isStreaming)
         {
             string text = await response.Content.ReadAsStringAsync(cancellationToken);
-            progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "AI response received ({0}); parsing analysis...", routeName));
+            progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Validating {0} response", routeName));
             return new AnalysisResponsePayload(
                 text,
                 false,
@@ -485,8 +491,8 @@ public sealed partial class AiAnalysisService
                 {
                     lastProgressReport = streamStopwatch.Elapsed;
                     progress?.Report(output.Length == 0
-                        ? new(AuditStage.Analyze, AuditStepState.Active, "AI endpoint connected ({0}); waiting for analysis data ({1:0}s)...", routeName, streamStopwatch.Elapsed.TotalSeconds)
-                        : new(AuditStage.Analyze, AuditStepState.Active, "Receiving AI response from {0} ({1:N0} characters, {2:0}s)...", routeName, output.Length, streamStopwatch.Elapsed.TotalSeconds));
+                        ? new(AuditStage.Analyze, AuditStepState.Active, "Waiting for {0} ({1:0}s)", routeName, streamStopwatch.Elapsed.TotalSeconds)
+                        : new(AuditStage.Analyze, AuditStepState.Active, "{0}: {1:N0} characters ({2:0}s)", routeName, output.Length, streamStopwatch.Elapsed.TotalSeconds));
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -534,7 +540,7 @@ public sealed partial class AiAnalysisService
             {
                 lastProgressReport = streamStopwatch.Elapsed;
                 progress?.Report(new(AuditStage.Analyze, AuditStepState.Active,
-                    "Receiving AI response from {0} ({1:N0} characters, {2:0}s)...", routeName, output.Length, streamStopwatch.Elapsed.TotalSeconds));
+                    "{0}: {1:N0} characters ({2:0}s)", routeName, output.Length, streamStopwatch.Elapsed.TotalSeconds));
             }
         }
 
@@ -555,7 +561,7 @@ public sealed partial class AiAnalysisService
                 "The AI streaming response ended before a complete findings result was received.");
         }
 
-        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "AI response received from {0}; parsing analysis...", routeName));
+        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Validating {0} response", routeName));
 
         return new AnalysisResponsePayload(
             output.Length == 0 ? "{}" : output.ToString(),
@@ -1286,7 +1292,8 @@ public sealed partial class AiAnalysisService
                     systemPrompt,
                     inputTokenBudget,
                     routeState,
-                    progress,
+                    new AuditProgressReporter(value => progress?.Report(new(value.Stage, value.State, value.MessageKey, value.Arguments)
+                    { BatchNumber = value.Stage == AuditStage.Analyze ? index + 1 : 0 })),
                     cancellationToken);
                 var issues = RemapIssuesToIndexes(
                     localIssues,

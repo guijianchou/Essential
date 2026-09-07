@@ -492,7 +492,14 @@ public class AuditSchedulerService : IHostedService, IDisposable
             // Persist finished batches even when translation was interrupted by a new scan.
             foreach (var record in records)
             {
-                updated |= await _storageService.UpdateTranslatedFindingsAsync(record.Id, record.OriginalJson, record.Findings);
+                if (!record.Findings.Any(issue => issue.HasBilingualText)) continue;
+                bool saved = await _storageService.UpdateTranslatedFindingsAsync(record.Id, record.OriginalJson, record.Findings);
+                updated |= saved;
+                if (!saved)
+                {
+                    state = AuditStepState.Failed;
+                    status = "Historical translation could not be saved. It will retry after the next scan.";
+                }
             }
             if (updated) HistoryUpdated?.Invoke(this, EventArgs.Empty);
         }

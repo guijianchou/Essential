@@ -45,10 +45,8 @@ public sealed partial class AiAnalysisService
         var batches = Enumerable.Range(0, groups.Count).Chunk(8).ToList();
         progress?.Report(new(AuditStage.Translate, AuditStepState.Active, "Translating historical findings in the background...")
         { TotalBatches = batches.Count });
-        var requestProgress = new AuditProgressReporter(value => progress?.Report(
-            new(AuditStage.Translate, AuditStepState.Active, value.MessageKey, value.Arguments)));
         int completed = 0;
-        var tasks = batches.Select(async indexes =>
+        var tasks = batches.Select(async (indexes, batchIndex) =>
         {
             await gate.WaitAsync(cancellationToken);
             try
@@ -64,6 +62,8 @@ public sealed partial class AiAnalysisService
                         groups[index][0].Recommendation
                     })
                 });
+                var requestProgress = new AuditProgressReporter(value => progress?.Report(
+                    new(AuditStage.Translate, AuditStepState.Active, value.MessageKey, value.Arguments) { BatchNumber = batchIndex + 1 }));
                 var response = await SendAnalysisRequestAsync(routes, prompt, input, routeState, requestProgress, cancellationToken);
                 if (!response.IsSuccessStatusCode)
                     throw new InvalidOperationException(AppText.Get("Historical translation failed. It will retry after the next scan."));

@@ -38,6 +38,7 @@ public sealed class AuditProgressEventArgs : EventArgs
     public string Message => AppText.Format(MessageKey, Arguments);
     public int CompletedBatches { get; init; }
     public int TotalBatches { get; init; }
+    public int BatchNumber { get; init; }
 
     public AuditProgressEventArgs(AuditStage stage, AuditStepState state, string message, params object?[] arguments)
     {

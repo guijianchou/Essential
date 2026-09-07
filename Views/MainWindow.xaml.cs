@@ -1,13 +1,20 @@
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
+using System.Numerics;
+using System.Threading.Tasks;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Media.Animation;
 using LocalSecurityAudit.Helpers;
 using LocalSecurityAudit.Services;
 using LocalSecurityAudit.ViewModels;
 using Windows.Graphics;
+using Windows.UI.ViewManagement;
 
 namespace LocalSecurityAudit.Views;
 
@@ -25,6 +32,9 @@ public sealed partial class MainWindow : Window
     private bool _isClosed;
     private bool _isHiddenToTray;
     private bool _isClosing;
+    private bool _isPaneToggling;
+    private readonly UISettings _uiSettings = new();
+    private readonly Dictionary<FrameworkElement, Action> _releaseStepBindings = new();
 
     public MainViewModel ViewModel { get; }
 
@@ -119,7 +129,118 @@ public sealed partial class MainWindow : Window
         if (WorkflowHost != null) WorkflowHost.Height = Math.Max(160, e.NewSize.Height - 184);
     }
 
-    private void NavigationView_ItemInvoked(
+    private void OnPaneOpening(NavigationView sender, object args)
+    {
+        if (WorkflowHost != null) FadePaneLabels(0, 1, 180);
+    }
+
+    private void FadePaneLabels(float from, float to, int milliseconds)
+    {
+        bool motion = _uiSettings.AnimationsEnabled;
+        var labels = _releaseStepBindings.Keys.Select(element => element.FindName("StepText"))
+            .OfType<FrameworkElement>().Append(WorkflowHeading).Append(WorkflowSummary);
+        foreach (var label in labels)
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(label);
+            visual.StopAnimation("Opacity");
+            visual.Opacity = to;
+            if (!motion) continue;
+            var fade = visual.Compositor.CreateScalarKeyFrameAnimation();
+            fade.InsertKeyFrame(0, from);
+            fade.InsertKeyFrame(1, to);
+            fade.Duration = TimeSpan.FromMilliseconds(milliseconds);
+            visual.StartAnimation("Opacity", fade);
+        }
+    }
+
+    private async Task TogglePaneAsync()
+    {
+        if (_isPaneToggling) return;
+        _isPaneToggling = true;
+        try
+        {
+            if (ViewModel.IsPaneOpen && _uiSettings.AnimationsEnabled)
+            {
+                FadePaneLabels(1, 0, 120);
+                await Task.Delay(120);
+            }
+            if (!_isClosed) ViewModel.IsPaneOpen = !ViewModel.IsPaneOpen;
+        }
+        finally { _isPaneToggling = false; }
+    }
+
+    private void AnimateStepEntry(FrameworkElement element)
+    {
+        if (!_uiSettings.AnimationsEnabled) return;
+        ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+        var visual = ElementCompositionPreview.GetElementVisual(element);
+        var compositor = visual.Compositor;
+        var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 1), new Vector2(0.3f, 1));
+        var fade = compositor.CreateScalarKeyFrameAnimation();
+        fade.InsertKeyFrame(0, 0.55f);
+        fade.InsertKeyFrame(1, 1, easing);
+        fade.Duration = TimeSpan.FromMilliseconds(180);
+        visual.StartAnimation("Opacity", fade);
+        var slide = compositor.CreateScalarKeyFrameAnimation();
+        slide.InsertKeyFrame(0, 4);
+        slide.InsertKeyFrame(1, 0, easing);
+        slide.Duration = fade.Duration;
+        visual.StartAnimation("Translation.Y", slide);
+    }
+
+    private void OnScanStepLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement element || element.DataContext is not ScanStep step
+            || _releaseStepBindings.ContainsKey(element)) return;
+        var meter = (ProgressBar)element.FindName("BatchProgress");
+        var ring = (ProgressRing)element.FindName("ActiveRing");
+        var staticIcon = (FontIcon)element.FindName("StaticActiveIcon");
+        var previousState = step.State;
+        double previousPercent = step.Percent;
+        Storyboard? animation = null;
+        meter.Value = step.Percent;
+
+        void UpdatePresentation()
+        {
+            bool motion = _uiSettings.AnimationsEnabled;
+            ring.IsActive = step.IsActive && motion;
+            staticIcon.Visibility = step.IsActive && !motion ? Visibility.Visible : Visibility.Collapsed;
+            if (previousState != step.State)
+            {
+                previousState = step.State;
+                if (step.State != AuditStepState.Pending) AnimateStepEntry(element);
+            }
+            if (previousPercent == step.Percent) return;
+            previousPercent = step.Percent;
+            double from = meter.Value;
+            animation?.Stop();
+            meter.Value = step.Percent;
+            // Only confirmed batch counts animate; resets and disabled motion update immediately.
+            if (!motion || step.Percent <= from) return;
+            var tween = new DoubleAnimation
+            {
+                From = from, To = step.Percent, Duration = new Duration(TimeSpan.FromMilliseconds(220)),
+                EnableDependentAnimation = true, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(tween, meter);
+            Storyboard.SetTargetProperty(tween, "Value");
+            animation = new Storyboard { FillBehavior = FillBehavior.Stop };
+            animation.Children.Add(tween);
+            animation.Begin();
+        }
+
+        PropertyChangedEventHandler changed = (_, _) => UpdatePresentation();
+        step.PropertyChanged += changed;
+        _releaseStepBindings[element] = () => { step.PropertyChanged -= changed; animation?.Stop(); ring.IsActive = false; };
+        UpdatePresentation();
+    }
+
+    private void OnScanStepUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement element && _releaseStepBindings.Remove(element, out var release)) release();
+    }
+
+    private async void NavigationView_ItemInvoked(
         NavigationView sender,
         NavigationViewItemInvokedEventArgs args)
     {
@@ -145,7 +266,7 @@ public sealed partial class MainWindow : Window
         switch (item.Tag?.ToString())
         {
             case "toggle-pane":
-                ViewModel.IsPaneOpen = !ViewModel.IsPaneOpen;
+                await TogglePaneAsync();
                 break;
             case "dashboard":
                 NavigateIfNeeded(typeof(DashboardPage), item);
@@ -305,6 +426,8 @@ public sealed partial class MainWindow : Window
     {
         _isClosed = true;
         ViewModel.Dispose();
+        foreach (var release in _releaseStepBindings.Values) release();
+        _releaseStepBindings.Clear();
         _sizeGuard?.Dispose();
         _sizeGuard = null;
         _settingsService.SettingsChanged -= OnSettingsChanged;

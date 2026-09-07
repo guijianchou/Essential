@@ -514,5 +514,31 @@ Test-Case 'Missing event references cannot assign unrelated same-ID evidence' {
     Assert-True ($normalized[0].EventRef -eq 'event-1' -and $normalized[0].EventRecordId -eq '202') 'A unique ID and exact timestamp did not recover the correct evidence.'
 }
 
+Test-Case 'Late streaming updates cannot reopen a terminal workflow node' {
+    foreach ($state in 'Done', 'Failed', 'Skipped') {
+        $step = [LocalSecurityAudit.ViewModels.ScanStep]::new('Analyze')
+        $null = $step.Update([LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', $state, 'terminal', [object[]]@()))
+        $late = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'late output', [object[]]@())
+        Assert-True (-not $step.Update($late) -and $step.State.ToString() -eq $state) 'Late output reopened a finished node.'
+        $step.Reset()
+        Assert-True ($step.Update($late) -and $step.IsActive) 'A new scan did not reopen its node.'
+    }
+}
+
+Test-Case 'Concurrent stream details identify their batch without moving aggregate progress' {
+    $step = [LocalSecurityAudit.ViewModels.ScanStep]::new('Analyze')
+    $detail = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'Waiting for {0} ({1:0}s)', [object[]]@('Main', 15))
+    $detail.BatchNumber = 2
+    $null = $step.Update($detail)
+    Assert-True ($step.Detail.Contains('2') -and $step.Detail.Contains('Main') -and $step.Percent -eq 0) 'Request-local details were confused with completed batches.'
+    $height = $step.RowHeight
+    $completed = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'batch completed', [object[]]@())
+    $completed.CompletedBatches = 1
+    $completed.TotalBatches = 3
+    Assert-True ($step.Update($completed) -and $step.Percent -gt 33 -and $step.RowHeight -eq $height) 'Throttling dropped a batch completion or changed row height.'
+    $step.ShowText = $false
+    Assert-True ($step.IsActive -and $step.Percent -gt 33 -and -not $step.HasBatchProgress) 'Collapsing the sidebar lost scan state.'
+}
+
 Write-Output "$script:passed passed; $script:failed failed. No network requests or user-data writes."
 if ($script:failed -gt 0) { exit 1 }
