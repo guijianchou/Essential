@@ -422,6 +422,41 @@ Test-Case 'Incomplete response status is rejected' {
     } ([System.Net.Http.HttpRequestException])
 }
 
+Test-Case 'Remote cancellation is recognized before the stream closes' {
+    foreach ($event in @(
+        @{type='response.cancelled'},
+        @{type='response.canceled'},
+        @{type='response.updated'; response=@{status='cancelled'}}
+    )) {
+        Assert-Throws { Read-TestStream @($event) -HoldOpen } ([System.Net.Http.HttpRequestException])
+    }
+}
+
+Test-Case 'Response failure status is recognized without a failed event type' {
+    Assert-Throws {
+        Read-TestStream @(@{type='response.updated'; response=@{status='failed'; error=@{code='server_error'}}}) -HoldOpen
+    } ([System.Net.Http.HttpRequestException])
+}
+
+Test-Case 'Failed JSON responses cannot be accepted as complete findings' {
+    foreach ($status in 'cancelled', 'failed', 'incomplete') {
+        [string]$payload = @{status=$status; output_text='{"issues":[]}'} | ConvertTo-Json -Compress
+        Assert-Throws { Invoke-AnalysisMethod 'ExtractMessageContent' @($payload, 'responses') } ([System.Net.Http.HttpRequestException])
+    }
+}
+
+Test-Case 'Provider error payloads are not exposed in exception text' {
+    $failure = $null
+    try {
+        $null = Read-TestStream @(@{type='error'; error=@{message='synthetic-private-value'}})
+    }
+    catch {
+        $failure = $_.Exception
+    }
+    Assert-True ($null -ne $failure) 'Expected a provider failure.'
+    Assert-True (-not $failure.ToString().Contains('synthetic-private-value')) 'Provider payload leaked into the exception.'
+}
+
 Test-Case 'Chat stop succeeds and token-limit termination fails' {
     $result = Read-TestStream @(@{choices=@(@{delta=@{content='{"issues":[]}'}; finish_reason='stop'})}) -Mode 'chat'
     Assert-True ($result.Text -eq '{"issues":[]}') 'Complete chat result was rejected.'

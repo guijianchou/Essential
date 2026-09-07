@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -293,7 +294,7 @@ public sealed partial class AiAnalysisService
                     target,
                     systemPrompt,
                     userPrompt,
-                    usingFallback ? 2 : routes.Count > 1 ? 1 : 3,
+                    usingFallback ? 2 : routes.Count > 1 ? 1 : 2,
                     progress,
                     cancellationToken);
                 if (response.IsSuccessStatusCode
@@ -388,16 +389,30 @@ public sealed partial class AiAnalysisService
             request.Headers.Accept.Add(
                 new MediaTypeWithQualityHeaderValue("application/json"));
 
+            using var requestTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            requestTimeoutCts.CancelAfter(HttpClient.Timeout);
             try
             {
-                using var requestTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                requestTimeoutCts.CancelAfter(HttpClient.Timeout);
-                using var response = await HttpClient.SendAsync(
+                var sendTask = HttpClient.SendAsync(
                     request,
                     HttpCompletionOption.ResponseHeadersRead,
                     requestTimeoutCts.Token);
+                while (!sendTask.IsCompleted)
+                {
+                    try
+                    {
+                        await sendTask.WaitAsync(TimeSpan.FromSeconds(StreamingProgressIntervalSeconds));
+                    }
+                    catch (TimeoutException) when (!sendTask.IsFaulted)
+                    {
+                        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active,
+                            "Waiting for {0} headers ({1:0}s)", target.Name, stopwatch.Elapsed.TotalSeconds));
+                    }
+                }
+
+                using var response = await sendTask;
                 _diagnosticLogService.Write(
-                    $"AI request headers received: endpoint={endpoint}, status={(int)response.StatusCode}, contentType={response.Content.Headers.ContentType?.MediaType ?? "unknown"}, elapsedMs={stopwatch.ElapsedMilliseconds}");
+                    $"AI request headers received: route={target.Name}, endpoint={endpoint}, status={(int)response.StatusCode}, httpVersion={response.Version}, contentType={response.Content.Headers.ContentType?.MediaType ?? "unknown"}, elapsedMs={stopwatch.ElapsedMilliseconds}");
                 if ((int)response.StatusCode >= 500)
                 {
                     int statusCode = (int)response.StatusCode;
@@ -432,11 +447,17 @@ public sealed partial class AiAnalysisService
             catch (Exception ex)
             {
                 _diagnosticLogService.WriteException(
-                    $"AI request transport failed: endpoint={endpoint}, elapsedMs={stopwatch.ElapsedMilliseconds}",
+                    $"AI request failed: route={target.Name}, endpoint={endpoint}, elapsedMs={stopwatch.ElapsedMilliseconds}",
                     ex);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (requestTimeoutCts.IsCancellationRequested || ex is OperationCanceledException)
+                {
+                    throw new TimeoutException(AppText.Format(
+                        "The AI request timed out after {0} seconds.", HttpClient.Timeout.TotalSeconds), ex);
+                }
                 throw;
             }
-        }, cancellationToken, maxRetries);
+        }, cancellationToken, maxRetries, progress, target.Name);
     }
 
     private static async Task<AnalysisResponsePayload> ReadAnalysisResponseAsync(
@@ -453,6 +474,8 @@ public sealed partial class AiAnalysisService
         if (!isStreaming)
         {
             string text = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var document = JsonDocument.Parse(text);
+            ThrowIfResponseFailed(document.RootElement);
             progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Validating {0} response", routeName));
             return new AnalysisResponsePayload(
                 text,
@@ -582,6 +605,7 @@ public sealed partial class AiAnalysisService
     {
         if (dataLines.Count == 0)
         {
+            ThrowIfResponseFailed(default, eventName);
             return false;
         }
 
@@ -619,19 +643,7 @@ public sealed partial class AiAnalysisService
                 ? type.GetString() ?? string.Empty
                 : eventName;
 
-            if (eventType.Equals("error", StringComparison.OrdinalIgnoreCase)
-                || eventType.EndsWith(".failed", StringComparison.OrdinalIgnoreCase))
-            {
-                string errorMessage = root.TryGetProperty("error", out var error)
-                    ? error.ToString()
-                    : "The AI streaming response reported a failure.";
-                throw new HttpRequestException(errorMessage);
-            }
-
-            if (eventType.Equals("response.incomplete", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new HttpRequestException("The AI endpoint reported an incomplete response.");
-            }
+            ThrowIfResponseFailed(root, eventType);
 
             if (string.Equals(mode, "responses", StringComparison.OrdinalIgnoreCase))
             {
@@ -705,7 +717,7 @@ public sealed partial class AiAnalysisService
                 {
                     if (!string.Equals(finishReason.GetString(), "stop", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new HttpRequestException("The AI endpoint stopped before completing the analysis.");
+                        throw new AiResponseException(AppText.Get("The AI endpoint returned an incomplete analysis. The scan has stopped."), false);
                     }
 
                     receivedTerminalEvent = true;
@@ -714,6 +726,44 @@ public sealed partial class AiAnalysisService
             }
 
             return false;
+        }
+    }
+
+    private static void ThrowIfResponseFailed(JsonElement root, string eventType = "")
+    {
+        var response = root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty("response", out var nested)
+            && nested.ValueKind == JsonValueKind.Object ? nested : root;
+        string status = TryGetString(response, "status", out var value) ? value : string.Empty;
+        if (eventType.Equals("response.cancelled", StringComparison.OrdinalIgnoreCase)
+            || eventType.Equals("response.canceled", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("cancelled", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("canceled", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AiResponseException(AppText.Get("The AI endpoint cancelled the analysis. The scan has stopped."), false);
+        }
+
+        if (eventType.Equals("response.incomplete", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("incomplete", StringComparison.OrdinalIgnoreCase))
+        {
+            bool tokenLimit = response.ValueKind == JsonValueKind.Object
+                && response.TryGetProperty("incomplete_details", out var details)
+                && TryGetString(details, "reason", out var reason)
+                && reason == "max_output_tokens";
+            throw new AiResponseException(AppText.Get(tokenLimit
+                ? "The AI analysis reached its output token limit. Try a lower reasoning effort."
+                : "The AI endpoint returned an incomplete analysis. The scan has stopped."), false);
+        }
+
+        if (eventType.Equals("error", StringComparison.OrdinalIgnoreCase)
+            || eventType.EndsWith(".failed", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("failed", StringComparison.OrdinalIgnoreCase)
+            || (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("error", out var error)
+                && error.ValueKind != JsonValueKind.Null))
+        {
+            // Provider error bodies can echo credentials or event data. Keep them out
+            // of exceptions, which are displayed in the sidebar and diagnostic log.
+            throw new AiResponseException(AppText.Get("The AI endpoint reported an analysis failure."), true);
         }
     }
 
@@ -751,7 +801,8 @@ public sealed partial class AiAnalysisService
 
     private static bool TryGetString(JsonElement element, string propertyName, out string value)
     {
-        if (element.TryGetProperty(propertyName, out var property)
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(propertyName, out var property)
             && property.ValueKind == JsonValueKind.String)
         {
             value = property.GetString() ?? string.Empty;
@@ -958,6 +1009,7 @@ public sealed partial class AiAnalysisService
     {
         using var document = JsonDocument.Parse(responseJson);
         var root = document.RootElement;
+        ThrowIfResponseFailed(root);
 
         if (string.Equals(mode, "responses", StringComparison.OrdinalIgnoreCase))
         {
@@ -1009,7 +1061,9 @@ public sealed partial class AiAnalysisService
         string operation,
         Func<Task<AnalysisResponsePayload>> action,
         CancellationToken cancellationToken,
-        int maxRetries = 3)
+        int maxRetries,
+        IProgress<AuditProgressEventArgs>? progress,
+        string routeName)
     {
         Exception? lastError = null;
 
@@ -1022,7 +1076,9 @@ public sealed partial class AiAnalysisService
                     $"AI request attempt started: attempt={attempt + 1}/{maxRetries}, operation={operation}");
                 return await action();
             }
-            catch (HttpRequestException ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested
+                && ex is HttpRequestException or IOException
+                && ex is not AiResponseException)
             {
                 lastError = ex;
                 _diagnosticLogService.WriteException(
@@ -1033,56 +1089,14 @@ public sealed partial class AiAnalysisService
                     break;
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken);
-            }
-            catch (IOException ex)
-            {
-                lastError = ex;
-                _diagnosticLogService.WriteException(
-                    $"AI request attempt failed: attempt={attempt + 1}/{maxRetries}, operation={operation}",
-                    ex);
-                if (attempt >= maxRetries - 1)
-                {
-                    break;
-                }
-
-                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken);
-            }
-            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-                _diagnosticLogService.WriteException(
-                    $"AI request attempt timed out: attempt={attempt + 1}/{maxRetries}, operation={operation}",
-                    ex);
-                if (attempt >= maxRetries - 1)
-                {
-                    break;
-                }
-
-                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken);
-            }
-            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-                _diagnosticLogService.WriteException(
-                    $"AI request attempt timed out: attempt={attempt + 1}/{maxRetries}, operation={operation}",
-                    ex);
-                if (attempt >= maxRetries - 1)
-                {
-                    break;
-                }
-
-                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken);
+                double delaySeconds = Math.Pow(2, attempt);
+                progress?.Report(new(AuditStage.Analyze, AuditStepState.Active,
+                    "{0} interrupted; retry in {1:0}s ({2}/{3})", routeName, delaySeconds, attempt + 2, maxRetries));
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
             }
         }
 
-        if (lastError is OperationCanceledException)
-        {
-            throw new TimeoutException(
-                $"The AI request timed out after {HttpClient.Timeout.TotalSeconds:0} seconds on each attempt. Last error: {FormatException(lastError)}",
-                lastError);
-        }
-
+        cancellationToken.ThrowIfCancellationRequested();
         throw new HttpRequestException(
             $"The AI endpoint request failed after {maxRetries} attempts. Last error: {FormatException(lastError ?? new HttpRequestException("Unknown transport error."))}",
             lastError);
@@ -1264,8 +1278,9 @@ public sealed partial class AiAnalysisService
 
     private static bool ShouldFailover(int statusCode) => statusCode >= 500 || statusCode == 408 || statusCode == 429;
 
-    private static bool IsFailoverException(Exception exception) => exception is
-        HttpRequestException or IOException or TimeoutException or TaskCanceledException or OperationCanceledException or InvalidOperationException;
+    private static bool IsFailoverException(Exception exception) => exception is AiResponseException responseError
+        ? responseError.AllowFailover
+        : exception is HttpRequestException or IOException or TimeoutException or TaskCanceledException or OperationCanceledException or InvalidOperationException;
 
     private async Task<List<AuditIssue>> AnalyzeEventsParallelAsync(
         List<SecurityEvent> events,
@@ -1287,10 +1302,12 @@ public sealed partial class AiAnalysisService
         var allIssues = new ConcurrentBag<AuditIssue>();
         int completedBatches = 0;
         using var semaphore = new SemaphoreSlim(maxParallel);
+        using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        ExceptionDispatchInfo? firstFailure = null;
 
         var tasks = batches.Select(async (batch, index) =>
         {
-            await semaphore.WaitAsync(cancellationToken);
+            await semaphore.WaitAsync(batchCts.Token);
             try
             {
                 var localIssues = await AnalyzeBatchWithCacheAsync(
@@ -1301,7 +1318,7 @@ public sealed partial class AiAnalysisService
                     routeState,
                     new AuditProgressReporter(value => progress?.Report(new(value.Stage, value.State, value.MessageKey, value.Arguments)
                     { BatchNumber = value.Stage == AuditStage.Analyze ? index + 1 : 0 })),
-                    cancellationToken);
+                    batchCts.Token);
                 var issues = RemapIssuesToIndexes(
                     localIssues,
                     Enumerable.Range(index * batchSize, batch.Count).ToArray());
@@ -1315,13 +1332,28 @@ public sealed partial class AiAnalysisService
                 progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Analyzing ({0}/{1})... {2} issues found", completed, batches.Count, allIssues.Count)
                 { CompletedBatches = completed, TotalBatches = batches.Count });
             }
+            catch (Exception ex) when (!batchCts.IsCancellationRequested)
+            {
+                Interlocked.CompareExchange(ref firstFailure, ExceptionDispatchInfo.Capture(ex), null);
+                batchCts.Cancel();
+                throw;
+            }
             finally
             {
                 semaphore.Release();
             }
         });
 
-        await Task.WhenAll(tasks);
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            firstFailure?.Throw();
+            throw;
+        }
         return allIssues.ToList();
     }
 
@@ -1464,6 +1496,16 @@ public sealed partial class AiAnalysisService
         string Mode)
     {
         public bool IsSuccessStatusCode => StatusCode is >= 200 and <= 299;
+    }
+
+    private sealed class AiResponseException : HttpRequestException
+    {
+        public bool AllowFailover { get; }
+
+        public AiResponseException(string message, bool allowFailover) : base(message)
+        {
+            AllowFailover = allowFailover;
+        }
     }
 
     private sealed class AnalysisRouteState
