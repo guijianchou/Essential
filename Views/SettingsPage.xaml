@@ -386,7 +386,7 @@
                                     <Image Width="42" Height="42" Source="ms-appx:///Assets/logo-48.png" VerticalAlignment="Top" />
                                     <StackPanel Grid.Column="1" Spacing="4">
                                         <TextBlock Text="{Binding [LocalSecurityAudit], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
-                                        <TextBlock Text="{Binding [Version010], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                                        <TextBlock Text="{x:Bind ViewModel.VersionText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
                                         <TextBlock Text="{Binding [AlocalWindowseventlogauditworkspacebuiltwithWinUI3MicaandSQLite], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                     </StackPanel>
                                 </Grid>

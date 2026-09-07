@@ -482,5 +482,37 @@ Test-Case 'Workflow progress stays monotonic and retranslates without parsing UI
     Assert-True ($step.IsInactive -and $step.Percent -eq 0 -and -not $step.HasBatchProgress) 'A new scan retained previous batch state.'
 }
 
+Test-Case 'Empty or fully filtered audits are not health assessments' {
+    $result = [LocalSecurityAudit.Models.AuditResult]::new()
+    Assert-True (-not $result.HasAssessment) 'Missing evidence was treated as an assessment.'
+    $result.Metadata = [System.Collections.Generic.Dictionary[string,System.Text.Json.JsonElement]]::new()
+    $result.Metadata['EventCount'] = [System.Text.Json.JsonSerializer]::SerializeToElement(100, [int])
+    $result.Metadata['AnalyzedEventCount'] = [System.Text.Json.JsonSerializer]::SerializeToElement(0, [int])
+    Assert-True (-not $result.HasAssessment) 'Fully filtered events earned a health assessment.'
+    $result.Metadata['AnalyzedEventCount'] = [System.Text.Json.JsonSerializer]::SerializeToElement(20, [int])
+    Assert-True $result.HasAssessment 'A valid AI assessment with no findings was dropped.'
+    $null = $result.Metadata.Remove('AnalyzedEventCount')
+    Assert-True $result.HasAssessment 'A legacy audit with recorded events became unreadable.'
+}
+
+Test-Case 'Missing event references cannot assign unrelated same-ID evidence' {
+    $events = [System.Collections.Generic.List[LocalSecurityAudit.Models.SecurityEvent]]::new()
+    $events.Add((New-TestEvent))
+    $newer = New-TestEvent
+    $newer.Timestamp = $newer.Timestamp.AddMinutes(2)
+    $newer.EventRecordId = 202
+    $events.Add($newer)
+    $issue = New-BilingualFinding
+    $issue.EventId = '4625'
+    $issue.EventDescription = 'unverified model-supplied evidence'
+    $issues = [System.Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
+    $issues.Add($issue)
+    $normalized = Invoke-AnalysisMethod 'NormalizeIssues' @($issues, $events)
+    Assert-True ([string]::IsNullOrEmpty($normalized[0].EventRef) -and [string]::IsNullOrEmpty($normalized[0].EventDescription)) 'An ambiguous ID was linked to an arbitrary source.'
+    $issue.EventTimestamp = $newer.Timestamp.ToString('O')
+    $normalized = Invoke-AnalysisMethod 'NormalizeIssues' @($issues, $events)
+    Assert-True ($normalized[0].EventRef -eq 'event-1' -and $normalized[0].EventRecordId -eq '202') 'A unique ID and exact timestamp did not recover the correct evidence.'
+}
+
 Write-Output "$script:passed passed; $script:failed failed. No network requests or user-data writes."
 if ($script:failed -gt 0) { exit 1 }

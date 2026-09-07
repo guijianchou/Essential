@@ -100,6 +100,9 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private bool hasAuditData;
 
     [ObservableProperty]
+    private bool hasAssessment;
+
+    [ObservableProperty]
     private int healthScore;
 
     [ObservableProperty]
@@ -357,6 +360,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     {
         _displayedResult = null;
         HasAuditData = false;
+        HasAssessment = false;
         _allIssues.Clear();
         HealthScore = 0;
         HealthBand = HealthBand.Good;
@@ -388,6 +392,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     {
         _displayedResult = result;
         HasAuditData = true;
+        HasAssessment = result.HasAssessment;
         ShowNoAudit = false;
 
         _allIssues.Clear();
@@ -402,14 +407,14 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         }
 
         var breakdown = HealthScoreCalculator.Calculate(result.Findings);
-        HealthScore = breakdown.Score;
+        HealthScore = result.HasAssessment ? breakdown.Score : 0;
         HealthBand = breakdown.Band;
-        HealthScoreText = breakdown.Score.ToString(AppText.Culture);
-        HealthVerdict = breakdown.Verdict;
-        HealthSummaryText = breakdown.TotalFindings == 0
+        HealthScoreText = result.HasAssessment ? breakdown.Score.ToString(AppText.Culture) : "--";
+        HealthVerdict = result.HasAssessment ? breakdown.Verdict : AppText.Get("Not assessed");
+        HealthSummaryText = !result.HasAssessment ? AppText.Get("No events were analyzed by AI.") : breakdown.TotalFindings == 0
             ? AppText.Get("No findings in the latest audit")
             : AppText.Format("Based on {0} high, {1} medium and {2} low findings.", breakdown.HighCount, breakdown.MediumCount, breakdown.LowCount);
-        HealthDeductionText = BuildDeductionText(breakdown);
+        HealthDeductionText = result.HasAssessment ? BuildDeductionText(breakdown) : string.Empty;
 
         TotalFindings = breakdown.TotalFindings;
         HighCount = breakdown.HighCount;
@@ -431,6 +436,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         EventCountText = eventCount.ToString("N0", AppText.Culture);
         CoverageState = eventCount == 0
             ? AppText.Get("No events read")
+            : !result.HasAssessment ? AppText.Get("Not assessed")
             : _allIssues.Count == 0 ? AppText.Get("Scanned · no findings") : AppText.Get("Evidence available");
         CoverageText = eventCount == 0
             ? AppText.Get("0 events were read in this window. No conclusion about system safety can be drawn.")

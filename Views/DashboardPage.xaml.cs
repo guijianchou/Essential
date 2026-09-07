@@ -49,7 +49,7 @@ public sealed partial class DashboardPage : Page
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(DashboardViewModel.HealthScore)
-            or nameof(DashboardViewModel.HasAuditData)
+            or nameof(DashboardViewModel.HasAssessment)
             or nameof(DashboardViewModel.HealthBand))
         {
             ApplyHealthPresentation();
@@ -62,7 +62,7 @@ public sealed partial class DashboardPage : Page
     /// </summary>
     private void ApplyHealthPresentation()
     {
-        bool hasAuditData = ViewModel.HasAuditData;
+        bool hasAuditData = ViewModel.HasAssessment;
         int score = Math.Clamp(ViewModel.HealthScore, 0, 100);
 
         HealthMeterFillColumn.Width = new GridLength(hasAuditData ? score : 0, GridUnitType.Star);

@@ -17,6 +17,8 @@ namespace LocalSecurityAudit.ViewModels;
 
 public partial class SettingsViewModel : ObservableObject
 {
+    public string VersionText => AppText.Format("Version {0}", typeof(App).Assembly.GetName().Version?.ToString(3));
+
     private readonly DataStorageService _storageService;
     private readonly SettingsService _settingsService;
     private readonly AiAnalysisService _aiAnalysisService;
@@ -117,6 +119,7 @@ public partial class SettingsViewModel : ObservableObject
         AiTargets.CollectionChanged += OnTargetsCollectionChanged;
         AppText.Current.LanguageChanged += (_, _) =>
         {
+            OnPropertyChanged(nameof(VersionText));
             UpdatePipelineSummary();
             UpdatePolicyStatus(AgentInstructions);
         };

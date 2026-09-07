@@ -116,7 +116,7 @@
   "30 days": "30 天",
   "Clean old data": "清理旧数据",
   "Optimize database": "优化数据库",
-  "Version 0.1.0": "版本 0.1.0",
+  "Version {0}": "版本 {0}",
   "A local Windows event-log audit workspace built with WinUI 3, Mica and SQLite.": "基于 WinUI 3、Mica 和 SQLite 的本地 Windows 事件日志审计工具。",
   "Data and privacy": "数据与隐私",
   "Audit records stay on this computer. Scans send event summaries; historical translation sends existing analysis text to the configured endpoint.": "审计记录保存在本机。扫描时发送事件摘要，历史双语转换时发送已有分析文本，目标均为已配置的模型接口。",
@@ -396,5 +396,7 @@
   "Scan saved": "本次扫描已保存",
   "Scanning": "正在扫描",
   "English + Simplified Chinese": "英文 + 简体中文",
-  "Pending": "等待中"
+  "Pending": "等待中",
+  "Not assessed": "未评估",
+  "No events were analyzed by AI.": "本次没有事件进入 AI 分析。"
 }

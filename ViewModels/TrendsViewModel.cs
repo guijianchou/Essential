@@ -156,7 +156,7 @@ public partial class TrendsViewModel : ObservableObject
                     High = breakdown.HighCount,
                     Medium = breakdown.MediumCount,
                     Low = breakdown.LowCount,
-                    Health = breakdown.Score,
+                    Health = latest.HasAssessment ? breakdown.Score : null,
                     Scans = dayResults.Count,
                     Events = ReadMetadataInt(latest, "EventCount")
                 });
@@ -181,9 +181,12 @@ public partial class TrendsViewModel : ObservableObject
 
             if (withData.Count > 0)
             {
-                double averageHealth = withData.Average(day => day.Health ?? 0);
-                AverageHealthText = Math.Round(averageHealth).ToString(AppText.Culture);
-                AverageHealthDetailText = HealthScoreCalculator.GetVerdict((int)Math.Round(averageHealth)).ToLowerInvariant();
+                var assessed = withData.Where(day => day.Health.HasValue).ToList();
+                double averageHealth = assessed.Count > 0 ? assessed.Average(day => day.Health!.Value) : 0;
+                AverageHealthText = assessed.Count > 0 ? Math.Round(averageHealth).ToString(AppText.Culture) : "--";
+                AverageHealthDetailText = assessed.Count > 0
+                    ? HealthScoreCalculator.GetVerdict((int)Math.Round(averageHealth)).ToLowerInvariant()
+                    : AppText.Get("Not assessed");
 
                 double perScan = results.Average(result => result.Findings.Count);
                 FindingsPerScanText = perScan.ToString(perScan >= 10 ? "0" : "0.#", AppText.Culture);
@@ -197,7 +200,7 @@ public partial class TrendsViewModel : ObservableObject
                 FindingsPerScanDetailText = AppText.Get("no scans yet");
             }
 
-            UpdateTrendStatus(withData);
+            UpdateTrendStatus(withData.Where(day => day.Health.HasValue).ToList());
 
             IsStatusVisible = false;
         }

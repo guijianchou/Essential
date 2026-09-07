@@ -304,7 +304,7 @@ public sealed partial class AiAnalysisService
             .ToDictionary(item => item.Ref, item => item.Event, StringComparer.OrdinalIgnoreCase);
         var eventsById = events
             .GroupBy(evt => evt.EventId)
-            .ToDictionary(group => group.Key, group => group.OrderBy(evt => evt.Timestamp).First());
+            .ToDictionary(group => group.Key, group => group.ToList());
 
         var normalized = new List<AuditIssue>();
         foreach (var issue in issues ?? Enumerable.Empty<AuditIssue>())
@@ -332,7 +332,16 @@ public sealed partial class AiAnalysisService
             if (matchedEvent == null
                 && int.TryParse(issue.EventId, out int issueEventId))
             {
-                eventsById.TryGetValue(issueEventId, out matchedEvent);
+                if (eventsById.TryGetValue(issueEventId, out var candidates))
+                {
+                    if (candidates.Count == 1) matchedEvent = candidates[0];
+                    else if (DateTimeOffset.TryParse(issue.EventTimestamp, CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal, out var observed))
+                    {
+                        var exact = candidates.Where(evt => evt.Timestamp.ToUniversalTime() == observed.UtcDateTime).ToList();
+                        if (exact.Count == 1) matchedEvent = exact[0];
+                    }
+                }
             }
 
             var relatedRefs = new List<string>();
@@ -399,6 +408,12 @@ public sealed partial class AiAnalysisService
                 issue.EventId = CompactText(issue.EventId);
                 issue.EventTimestamp = NormalizeUtcTimestamp(issue.EventTimestamp);
                 issue.Source = string.Empty;
+                issue.LogName = string.Empty;
+                issue.EventRecordId = string.Empty;
+                issue.EventDescription = string.Empty;
+                issue.EventAdditionalData = string.Empty;
+                issue.UserName = string.Empty;
+                issue.IpAddress = string.Empty;
                 category = IssueCategorizer.ParseCategory(issue.Category);
                 if (category == IssueCategory.Unknown)
                 {
