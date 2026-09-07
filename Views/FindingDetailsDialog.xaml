@@ -1,0 +1,112 @@
+<ContentDialog
+    x:Class="LocalSecurityAudit.Views.FindingDetailsDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="{Binding [Findingdetails], Source={StaticResource AppText}}"
+    CloseButtonText="{Binding [Close], Source={StaticResource AppText}}"
+    DefaultButton="None">
+    <ContentDialog.Resources>
+        <x:Double x:Key="ContentDialogMaxWidth">880</x:Double>
+        <Style x:Key="DetailHeading" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style x:Key="DetailBody" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="LineHeight" Value="23" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="IsTextSelectionEnabled" Value="True" />
+        </Style>
+        <Style x:Key="EvidenceText" TargetType="TextBlock" BasedOn="{StaticResource DetailBody}">
+            <Setter Property="FontFamily" Value="Consolas" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="LineHeight" Value="19" />
+        </Style>
+    </ContentDialog.Resources>
+    <ContentDialog.CloseButtonStyle>
+        <Style TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="HorizontalAlignment" Value="Right" />
+            <Setter Property="Width" Value="96" />
+        </Style>
+    </ContentDialog.CloseButtonStyle>
+
+    <Grid x:Name="LayoutRoot" RowDefinitions="Auto,*" RowSpacing="18">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <StackPanel Spacing="9">
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Border x:Name="SeverityBadge" Padding="8,3" CornerRadius="4">
+                        <TextBlock x:Name="SeverityText" Text="{x:Bind Issue.SeverityText}" FontSize="12" FontWeight="SemiBold" />
+                    </Border>
+                    <TextBlock Text="{x:Bind Issue.CategoryLabel}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Bind Issue.ConfidenceLabel}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock Text="{x:Bind Issue.DisplayTitle}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"
+                           MaxLines="3" TextTrimming="CharacterEllipsis" IsTextSelectionEnabled="True" />
+                <TextBlock Text="{x:Bind Issue.EvidenceSummaryText}" FontSize="12" TextWrapping="Wrap" MaxLines="2"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Text="{Binding [Pendingbilingualconversion], Source={StaticResource AppText}}" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="{x:Bind Issue.NeedsTranslation, Converter={StaticResource BoolToVisibilityConverter}}" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Spacing="5" HorizontalAlignment="Right">
+                <Button Width="34" Height="34" Padding="0" HorizontalAlignment="Right" Click="OnCopyClick"
+                        AutomationProperties.Name="{Binding [Copyfinding], Source={StaticResource AppText}}"
+                        ToolTipService.ToolTip="{Binding [Copyfinding], Source={StaticResource AppText}}">
+                    <FontIcon Glyph="&#xE8C8;" FontSize="15" />
+                </Button>
+                <TextBlock x:Name="CopyStatus" FontSize="12" Height="18" MaxWidth="100" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </Grid>
+
+        <TabView Grid.Row="1" IsAddTabButtonVisible="False" CanDragTabs="False" CanReorderTabs="False"
+                 TabWidthMode="SizeToContent" HorizontalContentAlignment="Stretch">
+            <TabViewItem Header="{Binding [Analysisandactions], Source={StaticResource AppText}}" IsClosable="False">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Spacing="24" Padding="4,20,18,12">
+                        <StackPanel>
+                            <TextBlock Text="{Binding [Whatwasdetected], Source={StaticResource AppText}}" Style="{StaticResource DetailHeading}" />
+                            <TextBlock Text="{x:Bind DescriptionText}" Style="{StaticResource DetailBody}" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="{Binding [Whythiswasflagged], Source={StaticResource AppText}}" Style="{StaticResource DetailHeading}" />
+                            <TextBlock Text="{x:Bind Issue.PriorityReasonText}" Style="{StaticResource DetailBody}" />
+                        </StackPanel>
+                        <Grid ColumnDefinitions="3,*" ColumnSpacing="14">
+                            <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="{Binding [Recommendedaction], Source={StaticResource AppText}}" Style="{StaticResource DetailHeading}" />
+                                <TextBlock Text="{x:Bind Issue.PriorityActionText}" Style="{StaticResource DetailBody}" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabViewItem>
+            <TabViewItem Header="{Binding [Eventevidence], Source={StaticResource AppText}}" IsClosable="False">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Spacing="18" Padding="4,14,18,12">
+                        <TextBlock Text="{Binding [Representativeevent], Source={StaticResource AppText}}" Style="{StaticResource DetailHeading}" />
+                        <ItemsControl ItemsSource="{x:Bind EvidenceRows}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" Padding="0,8">
+                                        <Grid ColumnDefinitions="140,*" ColumnSpacing="16">
+                                            <TextBlock Text="{Binding Key}" FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Expander Header="{Binding [Originalevent], Source={StaticResource AppText}}" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                            <TextBlock Text="{x:Bind EventText}" Style="{StaticResource EvidenceText}" />
+                        </Expander>
+                        <Expander Header="{Binding [Additionaleventdata], Source={StaticResource AppText}}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                            <TextBlock Text="{x:Bind AdditionalText}" Style="{StaticResource EvidenceText}" />
+                        </Expander>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabViewItem>
+        </TabView>
+    </Grid>
+</ContentDialog>

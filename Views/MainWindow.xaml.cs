@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -36,21 +37,72 @@ public sealed partial class MainWindow : Window
         _settingsService = settingsService;
         _schedulerService = schedulerService;
         InitializeComponent();
+        Root.DataContext = ViewModel;
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        AppWindow.Title = "Local Security Audit";
+        AppWindow.Title = AppText.Get("Local Security Audit");
         ApplyInitialBounds();
         _sizeGuard = new WindowSizeGuard(this, MinimumWidthDip, MinimumHeightDip);
         ApplyWindowIcon();
         Closed += OnClosed;
         AppWindow.Closing += OnAppWindowClosing;
         _settingsService.SettingsChanged += OnSettingsChanged;
+        AppText.Current.LanguageChanged += OnLanguageChanged;
         _schedulerService.AuditCompleted += OnAuditCompleted;
         _schedulerService.AuditFailed += OnAuditFailed;
         Root.ActualThemeChanged += OnActualThemeChanged;
         ApplyTheme(_settingsService.Current.Theme);
-        ContentFrame.Navigate(typeof(DashboardPage));
+        ApplyLanguage();
+        NavigateToStartupPage();
+    }
+
+    /// <summary>
+    /// Opens the page named by a "--page=trends" style argument. Used by tooling and
+    /// shortcuts; the dashboard remains the default.
+    /// </summary>
+    private void NavigateToStartupPage()
+    {
+        string? requested = Environment.GetCommandLineArgs()
+            .Select(argument => argument.Trim())
+            .FirstOrDefault(argument => argument.StartsWith("--page=", StringComparison.OrdinalIgnoreCase));
+        string page = requested?["--page=".Length..].ToLowerInvariant() ?? "dashboard";
+
+        switch (page)
+        {
+            case "trends":
+                if (FindMenuItem("trends") is { } trendsItem)
+                {
+                    NavigateIfNeeded(typeof(TrendsPage), trendsItem);
+                }
+                else
+                {
+                    ContentFrame.Navigate(typeof(TrendsPage));
+                }
+
+                break;
+            case "settings":
+                if (AppNavigation.SettingsItem is NavigationViewItem settingsItem)
+                {
+                    NavigateIfNeeded(typeof(SettingsPage), settingsItem);
+                }
+                else
+                {
+                    ContentFrame.Navigate(typeof(SettingsPage));
+                }
+
+                break;
+            default:
+                ContentFrame.Navigate(typeof(DashboardPage));
+                break;
+        }
+    }
+
+    private NavigationViewItem? FindMenuItem(string tag)
+    {
+        return AppNavigation.MenuItems
+            .OfType<NavigationViewItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase));
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -58,6 +110,13 @@ public sealed partial class MainWindow : Window
         ApplyInitialBounds();
         ApplyTitleBarTheme(Root.ActualTheme);
         InitializeTrayIcon();
+        _ = ViewModel.LoadSavedTimeAsync(App.GetService<DataStorageService>());
+    }
+
+    private void OnNavigationSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // Native PaneFooter precedes the footer menu; reserve two navigation rows and two footer rows.
+        if (WorkflowHost != null) WorkflowHost.Height = Math.Max(160, e.NewSize.Height - 184);
     }
 
     private void NavigationView_ItemInvoked(
@@ -85,6 +144,9 @@ public sealed partial class MainWindow : Window
 
         switch (item.Tag?.ToString())
         {
+            case "toggle-pane":
+                ViewModel.IsPaneOpen = !ViewModel.IsPaneOpen;
+                break;
             case "dashboard":
                 NavigateIfNeeded(typeof(DashboardPage), item);
                 break;
@@ -105,6 +167,7 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(() =>
         {
             ApplyTheme(theme);
+            ApplyLanguage();
             ApplyTrayIconVisibility();
         });
     }
@@ -112,6 +175,23 @@ public sealed partial class MainWindow : Window
     private void OnActualThemeChanged(FrameworkElement sender, object args)
     {
         ApplyTitleBarTheme(Root.ActualTheme);
+    }
+
+    private void ApplyLanguage()
+    {
+        AppWindow.Title = AppText.Get("Local Security Audit");
+        Root.Language = AppText.Culture.Name;
+        if (FindMenuItem("dashboard") is { } dashboardItem)
+            dashboardItem.Content = AppText.Get("Dashboard");
+        if (FindMenuItem("trends") is { } trendsItem)
+            trendsItem.Content = AppText.Get("Trends");
+        if (AppNavigation.SettingsItem is NavigationViewItem settingsItem)
+            settingsItem.Content = AppText.Get("Settings");
+    }
+
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (!_isClosed) DispatcherQueue.TryEnqueue(ApplyLanguage);
     }
 
     private void OnAuditCompleted(object? sender, AuditCompletedEventArgs e)
@@ -132,22 +212,22 @@ public sealed partial class MainWindow : Window
             bool hasHighSeverityIssue = e.HasHighSeverityIssue && settings.HighSeverityNotification;
             if (settings.ScanCompleteNotification)
             {
-                string message = $"{e.Result.Findings.Count} issue(s) found in the latest audit.";
+                string message = AppText.Format("{0} issue(s) found in the latest audit.", e.Result.Findings.Count);
                 if (hasHighSeverityIssue)
                 {
-                    message += " High-severity findings require review.";
+                    message += AppText.Get(" High-severity findings require review.");
                 }
 
                 _trayIcon.ShowNotification(
-                    "Local Security Audit",
+                    AppText.Get("Local Security Audit"),
                     message,
                     isError: hasHighSeverityIssue);
             }
             else if (hasHighSeverityIssue)
             {
                 _trayIcon.ShowNotification(
-                    "High-severity issue detected",
-                    "Review the latest audit on the dashboard.",
+                    AppText.Get("High-severity issue detected"),
+                    AppText.Get("Review the latest audit on the dashboard."),
                     isError: true);
             }
         });
@@ -164,7 +244,7 @@ public sealed partial class MainWindow : Window
         {
             if (!_isClosed && _settingsService.Current.ScanCompleteNotification)
             {
-                _trayIcon?.ShowNotification("Audit failed", e.Message, isError: true);
+                _trayIcon?.ShowNotification(AppText.Get("Audit failed"), e.Message, isError: true);
             }
         });
     }
@@ -174,7 +254,7 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
         ContentFrame.Content = new TextBlock
         {
-            Text = $"Unable to open this section.\n{e.Exception.Message}",
+            Text = AppText.Format("Unable to open this section.\n{0}", e.Exception.Message),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(48, 32, 48, 32)
         };
@@ -224,9 +304,11 @@ public sealed partial class MainWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosed = true;
+        ViewModel.Dispose();
         _sizeGuard?.Dispose();
         _sizeGuard = null;
         _settingsService.SettingsChanged -= OnSettingsChanged;
+        AppText.Current.LanguageChanged -= OnLanguageChanged;
         _schedulerService.AuditCompleted -= OnAuditCompleted;
         _schedulerService.AuditFailed -= OnAuditFailed;
         Root.ActualThemeChanged -= OnActualThemeChanged;
@@ -286,11 +368,31 @@ public sealed partial class MainWindow : Window
 
     private void OnTrayRestoreRequested(object? sender, EventArgs e)
     {
+        BringToFront();
+    }
+
+    /// <summary>Shows, restores and focuses the window, including when it was hidden to the tray.</summary>
+    public void BringToFront()
+    {
+        if (_isClosed)
+        {
+            return;
+        }
+
         AppWindow.Show();
-        Activate();
         _isHiddenToTray = false;
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        ShowWindow(hwnd, 9); // SW_RESTORE
+        Activate();
+        SetForegroundWindow(hwnd);
         ApplyTrayIconVisibility();
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     private void OnTrayExitRequested(object? sender, EventArgs e)
     {

@@ -4,250 +4,283 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:models="using:LocalSecurityAudit.Models"
     xmlns:vm="using:LocalSecurityAudit.ViewModels"
-    xmlns:lvc="using:LiveChartsCore.SkiaSharpView.WinUI"
     Background="Transparent">
     <Grid Background="Transparent" RowDefinitions="Auto,*">
-        <Grid Grid.Row="0"
-              Height="60"
-              Padding="32,0"
-              ColumnDefinitions="Auto,*,Auto">
-            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                <Ellipse Width="8" Height="8" Fill="{ThemeResource AccentFillColorDefaultBrush}" />
-                <StackPanel Spacing="0">
-                    <TextBlock Text="DASHBOARD" FontSize="13" FontWeight="SemiBold" />
-                    <TextBlock Text="Local security posture" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                </StackPanel>
+        <!-- Page header -->
+        <Grid Grid.Row="0" Padding="32,18,32,8" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <StackPanel Spacing="2" VerticalAlignment="Center">
+                <TextBlock Text="{Binding [Dashboard], Source={StaticResource AppText}}" Style="{StaticResource SubtitleTextStyle}" />
+                <TextBlock Text="{x:Bind ViewModel.LastAuditHeadline, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
             </StackPanel>
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <ProgressRing Width="16"
                               Height="16"
                               IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
                               Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                              AutomationProperties.Name="Audit in progress" />
-                <Button Height="32" Padding="12,0" Command="{x:Bind ViewModel.LoadDataCommand}" AutomationProperties.Name="Refresh latest audit" ToolTipService.ToolTip="Reload the latest saved audit">
+                              AutomationProperties.Name="{Binding [Auditinprogress], Source={StaticResource AppText}}" />
+                <Button Height="32" Padding="12,0" Command="{x:Bind ViewModel.LoadDataCommand}" AutomationProperties.Name="{Binding [Refresh], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Reloadthelatestsavedaudit], Source={StaticResource AppText}}">
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <FontIcon Glyph="&#xE72C;" FontSize="12" />
-                        <TextBlock Text="Refresh" FontSize="13" />
+                        <TextBlock Text="{Binding [Refresh], Source={StaticResource AppText}}" FontSize="13" />
                     </StackPanel>
                 </Button>
-                <Button Height="32" Padding="12,0" Command="{x:Bind ViewModel.RunFastScanCommand}" IsEnabled="{x:Bind ViewModel.IsLoading, Converter={StaticResource InverseBoolConverter}, Mode=OneWay}" AutomationProperties.Name="Run fast scan" ToolTipService.ToolTip="Scan events since the last audit">
+                <Button Height="32" Padding="12,0" Command="{x:Bind ViewModel.RunFastScanCommand}" IsEnabled="{x:Bind ViewModel.IsLoading, Converter={StaticResource InverseBoolConverter}, Mode=OneWay}" AutomationProperties.Name="{Binding [Runfastscan], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Scaneventssincethelastaudit], Source={StaticResource AppText}}">
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <FontIcon Glyph="&#xE8FE;" FontSize="12" />
-                        <TextBlock Text="Fast scan" FontSize="13" />
+                        <TextBlock Text="{Binding [Fastscan], Source={StaticResource AppText}}" FontSize="13" />
                     </StackPanel>
                 </Button>
-                <Button Height="32" Padding="12,0" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.RunFullScanCommand}" IsEnabled="{x:Bind ViewModel.IsLoading, Converter={StaticResource InverseBoolConverter}, Mode=OneWay}" AutomationProperties.Name="Run full scan" ToolTipService.ToolTip="Scan the past 24 hours">
+                <Button Height="32" Padding="12,0" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.RunFullScanCommand}" IsEnabled="{x:Bind ViewModel.IsLoading, Converter={StaticResource InverseBoolConverter}, Mode=OneWay}" AutomationProperties.Name="{Binding [Runfullscan], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Scanthepast24hours], Source={StaticResource AppText}}">
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <FontIcon Glyph="&#xE721;" FontSize="12" />
-                        <TextBlock Text="Full scan" FontSize="13" />
+                        <TextBlock Text="{Binding [Fullscan], Source={StaticResource AppText}}" FontSize="13" />
                     </StackPanel>
                 </Button>
             </StackPanel>
         </Grid>
 
         <ScrollViewer Grid.Row="1"
-                      Padding="32,8,32,28"
+                      Padding="32,8,32,32"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
-            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="16">
-                <InfoBar Grid.Row="0"
-                         IsOpen="{x:Bind ViewModel.IsStatusVisible, Mode=TwoWay}"
+            <StackPanel Spacing="16">
+                <InfoBar IsOpen="{x:Bind ViewModel.IsStatusVisible, Mode=TwoWay}"
                          Severity="{x:Bind ViewModel.StatusSeverity, Mode=OneWay}"
                          Message="{x:Bind ViewModel.StatusMessage, Mode=OneWay}"
                          IsClosable="True"
                          Closed="OnStatusBarClosed" />
 
-                <Grid Grid.Row="1"
-                      Height="238"
-                      ColumnDefinitions="1.05*,1.05*,1.3*"
-                      ColumnSpacing="16">
-                    <Border Padding="18,16" Style="{StaticResource LayerCardStyle}" AutomationProperties.Name="Current health score">
-                        <Grid RowDefinitions="Auto,*" ColumnDefinitions="*,Auto">
-                            <StackPanel Orientation="Horizontal" Spacing="7">
-                                <Ellipse Width="7" Height="7" Fill="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
-                                <TextBlock Text="HEALTH" Style="{StaticResource SectionLabelStyle}" />
+                <!-- Health score and latest audit -->
+                <Grid ColumnDefinitions="3*,2*" ColumnSpacing="16">
+                    <Border Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Healthscore], Source={StaticResource AppText}}">
+                        <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="12">
+                            <TextBlock Text="{Binding [Healthscore], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="18" VerticalAlignment="Bottom" Margin="0,4,0,0">
+                                <TextBlock x:Name="HealthScoreText"
+                                           Text="{x:Bind ViewModel.HealthScoreText, Mode=OneWay}"
+                                           Style="{StaticResource HeroNumberStyle}"
+                                           AutomationProperties.Name="{Binding [Currenthealthscore], Source={StaticResource AppText}}" />
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom" Margin="0,0,0,14">
+                                    <Ellipse x:Name="HealthDot" Width="10" Height="10" VerticalAlignment="Center" />
+                                    <TextBlock Text="{x:Bind ViewModel.HealthVerdict, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" VerticalAlignment="Center" />
+                                </StackPanel>
                             </StackPanel>
-                            <TextBlock Grid.Column="1"
-                                       Text="CURRENT POSTURE"
-                                       Style="{StaticResource MetaLabelStyle}"
-                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                            <Grid Grid.Row="1" Grid.ColumnSpan="2" Width="148" Height="148" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <Ellipse Width="132" Height="132" Stroke="{ThemeResource CardStrokeColorDefaultBrush}" StrokeThickness="8" />
-                                <Path x:Name="HealthRing"
-                                      Width="132"
-                                      Height="132"
-                                      Stretch="None"
-                                      Stroke="{ThemeResource SystemFillColorSuccessBrush}"
-                                      StrokeThickness="8"
-                                      StrokeStartLineCap="Round"
-                                      StrokeEndLineCap="Round"
-                                      HorizontalAlignment="Center"
-                                      VerticalAlignment="Center" />
-                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="0">
-                                    <TextBlock x:Name="HealthScoreText"
-                                               Text="{x:Bind ViewModel.HealthScoreText, Mode=OneWay}"
-                                               Style="{StaticResource MetricPrimaryStyle}"
-                                               FontSize="30"
-                                               HorizontalAlignment="Center"
-                                               AutomationProperties.Name="Current health score" />
-                                    <TextBlock Text="SCORE" Style="{StaticResource MetaLabelStyle}" HorizontalAlignment="Center" />
-                                </StackPanel>
+                            <Grid x:Name="HealthMeter" Grid.Row="2" Height="8" AutomationProperties.Name="{Binding [Healthmeter], Source={StaticResource AppText}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition x:Name="HealthMeterFillColumn" Width="0*" />
+                                    <ColumnDefinition x:Name="HealthMeterRestColumn" Width="100*" />
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.ColumnSpan="2" Background="{ThemeResource MeterTrackBrush}" CornerRadius="4" />
+                                <Border x:Name="HealthMeterFill" CornerRadius="4" Visibility="Collapsed" />
                             </Grid>
+                            <StackPanel Grid.Row="3" Spacing="2">
+                                <TextBlock Text="{x:Bind ViewModel.HealthSummaryText, Mode=OneWay}" Style="{StaticResource BodySmallTextStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.HealthDeductionText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
                         </Grid>
                     </Border>
 
-                    <Border Grid.Column="1" Padding="18,16" Style="{StaticResource LayerCardStyle}" AutomationProperties.Name="Latest audit summary">
-                        <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="12">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Text="LATEST AUDIT" Style="{StaticResource SectionLabelStyle}" />
-                                <TextBlock Grid.Column="1"
-                                           Text="{x:Bind ViewModel.LastUpdatedText, Mode=OneWay}"
-                                           Style="{StaticResource MonoDetailStyle}"
-                                           MaxWidth="150"
-                                           TextTrimming="CharacterEllipsis" />
+                    <Border Grid.Column="1" Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Latestaudit], Source={StaticResource AppText}}">
+                        <Grid RowDefinitions="Auto,*" RowSpacing="12">
+                            <TextBlock Text="{Binding [Latestaudit], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                            <Grid Grid.Row="1" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="24" RowSpacing="9" VerticalAlignment="Top">
+                                <TextBlock Grid.Row="0" Text="{Binding [Scan], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{x:Bind ViewModel.ScanTypeText, Mode=OneWay}" Style="{StaticResource BodySmallTextStyle}" TextAlignment="Right" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Grid.Row="1" Text="{Binding [Finished], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind ViewModel.FinishedText, Mode=OneWay}" Style="{StaticResource BodySmallTextStyle}" TextAlignment="Right" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Grid.Row="2" Text="{Binding [Window], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{x:Bind ViewModel.WindowText, Mode=OneWay}" Style="{StaticResource BodySmallTextStyle}" TextAlignment="Right" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Grid.Row="3" Text="{Binding [Eventsread], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{x:Bind ViewModel.EventCountText, Mode=OneWay}" Style="{StaticResource BodySmallTextStyle}" TextAlignment="Right" TextWrapping="NoWrap" />
+                                <TextBlock Grid.Row="4" Text="{Binding [Scansstored], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Text="{x:Bind ViewModel.ScanCountText, Mode=OneWay}" Style="{StaticResource BodySmallTextStyle}" TextAlignment="Right" TextWrapping="NoWrap" />
                             </Grid>
-                            <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="18">
-                                <StackPanel Spacing="2">
-                                    <TextBlock Text="SCANS" Style="{StaticResource MetaLabelStyle}" />
-                                    <TextBlock Text="{x:Bind ViewModel.ScanCount, Mode=OneWay}" Style="{StaticResource MetricCompactStyle}" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Spacing="2">
-                                    <TextBlock Text="EVENTS" Style="{StaticResource MetaLabelStyle}" />
-                                    <TextBlock Text="{x:Bind ViewModel.EventCount, Mode=OneWay}" Style="{StaticResource MetricCompactStyle}" />
-                                </StackPanel>
-                            </Grid>
-                            <Border Grid.Row="2" Style="{StaticResource CardRuleStyle}" />
-                            <Border Grid.Row="3" Style="{StaticResource InsetWellStyle}" Padding="10,8" VerticalAlignment="Stretch">
-                                <StackPanel Spacing="4">
-                                    <TextBlock Text="{x:Bind ViewModel.ScanTypeText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{x:Bind ViewModel.TimeRangeText, Mode=OneWay}" Style="{StaticResource MonoDetailStyle}" TextWrapping="Wrap" />
-                                </StackPanel>
-                            </Border>
-                        </Grid>
-                    </Border>
-
-                    <Border Grid.Column="2" Padding="18,16" Style="{StaticResource LayerCardStyle}" AutomationProperties.Name="Latest audit severity distribution">
-                        <Grid RowDefinitions="Auto,*">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Text="SEVERITY DISTRIBUTION" Style="{StaticResource SectionLabelStyle}" />
-                                <TextBlock Grid.Column="1" Text="LATEST" Style="{StaticResource MetaLabelStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                            </Grid>
-                            <lvc:PieChart Grid.Row="1"
-                                          Margin="0,8,0,0"
-                                          Series="{x:Bind ViewModel.SeverityPieSeries, Mode=OneWay}"
-                                          AutomationProperties.Name="Latest audit severity distribution chart" />
                         </Grid>
                     </Border>
                 </Grid>
 
-                <Border Grid.Row="2" Height="420" Padding="18,16" VerticalAlignment="Top" Style="{StaticResource LayerCardStyle}">
-                    <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="12">
-                        <Grid ColumnDefinitions="Auto,*,Auto">
-                            <StackPanel Orientation="Horizontal" Spacing="7">
-                                <Ellipse Width="7" Height="7" Fill="{ThemeResource SystemFillColorCriticalBrush}" VerticalAlignment="Center" />
-                                <TextBlock Text="SECURITY FINDINGS" Style="{StaticResource SectionLabelStyle}" />
+                <!-- Findings by category -->
+                <Border Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Findings], Source={StaticResource AppText}}">
+                    <StackPanel Spacing="14">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                            <StackPanel Spacing="2" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding [Findings], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.FindingsSummaryText, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
                             </StackPanel>
-                            <TextBlock Grid.Column="2" Style="{StaticResource NumericTextStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
-                                <Run Text="{x:Bind ViewModel.Issues.Count, Mode=OneWay}" />
-                                <Run Text=" TOTAL" />
-                            </TextBlock>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <ToggleButton Tag="All" Height="30" Padding="12,0" CornerRadius="15" Click="OnFilterClick" IsChecked="{x:Bind ViewModel.IsFilterAll, Mode=OneWay}" AutomationProperties.Name="{Binding [Showallfindings], Source={StaticResource AppText}}">
+                                    <TextBlock FontSize="12"><Run Text="{Binding [All], Source={StaticResource AppText}}" /><Run Text=" " /><Run Text="{x:Bind ViewModel.TotalFindings, Mode=OneWay}" /></TextBlock>
+                                </ToggleButton>
+                                <ToggleButton Tag="High" Height="30" Padding="12,0" CornerRadius="15" Click="OnFilterClick" IsChecked="{x:Bind ViewModel.IsFilterHigh, Mode=OneWay}" AutomationProperties.Name="{Binding [Showhighfindings], Source={StaticResource AppText}}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <Ellipse Width="8" Height="8" Fill="{ThemeResource SeverityHighFillBrush}" VerticalAlignment="Center" />
+                                        <TextBlock FontSize="12"><Run Text="{Binding [High], Source={StaticResource AppText}}" /><Run Text=" " /><Run Text="{x:Bind ViewModel.HighCount, Mode=OneWay}" /></TextBlock>
+                                    </StackPanel>
+                                </ToggleButton>
+                                <ToggleButton Tag="Medium" Height="30" Padding="12,0" CornerRadius="15" Click="OnFilterClick" IsChecked="{x:Bind ViewModel.IsFilterMedium, Mode=OneWay}" AutomationProperties.Name="{Binding [Showmediumfindings], Source={StaticResource AppText}}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <Ellipse Width="8" Height="8" Fill="{ThemeResource SeverityMediumFillBrush}" VerticalAlignment="Center" />
+                                        <TextBlock FontSize="12"><Run Text="{Binding [Medium], Source={StaticResource AppText}}" /><Run Text=" " /><Run Text="{x:Bind ViewModel.MediumCount, Mode=OneWay}" /></TextBlock>
+                                    </StackPanel>
+                                </ToggleButton>
+                                <ToggleButton Tag="Low" Height="30" Padding="12,0" CornerRadius="15" Click="OnFilterClick" IsChecked="{x:Bind ViewModel.IsFilterLow, Mode=OneWay}" AutomationProperties.Name="{Binding [Showlowfindings], Source={StaticResource AppText}}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <Ellipse Width="8" Height="8" Fill="{ThemeResource SeverityLowFillBrush}" VerticalAlignment="Center" />
+                                        <TextBlock FontSize="12"><Run Text="{Binding [Low], Source={StaticResource AppText}}" /><Run Text=" " /><Run Text="{x:Bind ViewModel.LowCount, Mode=OneWay}" /></TextBlock>
+                                    </StackPanel>
+                                </ToggleButton>
+                            </StackPanel>
                         </Grid>
 
-                        <Grid Grid.Row="1" ColumnDefinitions="*,*,*" ColumnSpacing="16" RowDefinitions="Auto,Auto" RowSpacing="2">
-                            <TextBlock Text="HIGH" Style="{StaticResource MetaLabelStyle}" />
-                            <TextBlock Grid.Column="1" Text="MEDIUM" Style="{StaticResource MetaLabelStyle}" />
-                            <TextBlock Grid.Column="2" Text="LOW" Style="{StaticResource MetaLabelStyle}" />
-                            <TextBlock Grid.Row="1" Text="{x:Bind ViewModel.HighIssueCount, Mode=OneWay}" Style="{StaticResource MetricCompactStyle}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
-                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind ViewModel.MediumIssueCount, Mode=OneWay}" Style="{StaticResource MetricCompactStyle}" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
-                            <TextBlock Grid.Row="1" Grid.Column="2" Text="{x:Bind ViewModel.LowIssueCount, Mode=OneWay}" Style="{StaticResource MetricCompactStyle}" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
-                        </Grid>
-                        <Border Grid.Row="2" Style="{StaticResource CardRuleStyle}" />
-
-                        <Grid Grid.Row="3">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled"
-                                          Padding="0,0,4,0"
-                                          AutomationProperties.Name="Security findings list">
-                                <ItemsControl ItemsSource="{x:Bind ViewModel.IssueGroups, Mode=OneWay}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:IssueGroup">
-                                            <Border Padding="10,8" Margin="0,0,0,8" Style="{StaticResource InsetWellStyle}">
-                                                <StackPanel Spacing="8">
-                                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="9">
-                                                        <Border Width="4" Height="28" CornerRadius="2" Background="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
-                                                        <StackPanel Grid.Column="1" Spacing="2">
-                                                            <TextBlock Text="{x:Bind GroupName}" Style="{StaticResource MetricSecondaryStyle}" />
-                                                            <TextBlock Style="{StaticResource MonoDetailStyle}">
-                                                                <Run Text="{x:Bind TotalCount}" />
-                                                                <Run Text=" total  ·  C " />
-                                                                <Run Text="{x:Bind CriticalCount}" />
-                                                                <Run Text="  H " />
-                                                                <Run Text="{x:Bind HighCount}" />
-                                                                <Run Text="  M " />
-                                                                <Run Text="{x:Bind MediumCount}" />
-                                                                <Run Text="  L " />
-                                                                <Run Text="{x:Bind LowCount}" />
-                                                            </TextBlock>
-                                                        </StackPanel>
-                                                        <FontIcon Grid.Column="2" Glyph="{x:Bind GroupIcon}" FontSize="16" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-                                                    </Grid>
-
-                                                     <ItemsControl ItemsSource="{x:Bind CategorySections}">
-                                                         <ItemsControl.ItemTemplate>
-                                                             <DataTemplate x:DataType="vm:IssueCategorySection">
-                                                                 <StackPanel Spacing="6">
-                                                                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="7" Margin="2,2,2,0">
-                                                                         <FontIcon Glyph="{x:Bind CategoryIcon}" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-                                                                         <TextBlock Grid.Column="1" Text="{x:Bind CategoryName}" Style="{StaticResource MetaLabelStyle}" VerticalAlignment="Center" />
-                                                                         <TextBlock Grid.Column="2" Style="{StaticResource MonoDetailStyle}" VerticalAlignment="Center">
-                                                                             <Run Text="{x:Bind TotalCount}" />
-                                                                             <Run Text="  ·  H " />
-                                                                             <Run Text="{x:Bind HighCount}" />
-                                                                             <Run Text="  M " />
-                                                                             <Run Text="{x:Bind MediumCount}" />
-                                                                             <Run Text="  L " />
-                                                                             <Run Text="{x:Bind LowCount}" />
-                                                                         </TextBlock>
-                                                                     </Grid>
-                                                                     <ItemsControl ItemsSource="{x:Bind Issues}">
-                                                                         <ItemsControl.ItemTemplate>
-                                                                             <DataTemplate x:DataType="models:AuditIssueEnhanced">
-                                                                                 <Border Padding="8,8" Margin="0,0,0,6" Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="5">
-                                                                                     <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
-                                                                                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-                                                                                             <TextBlock Text="{x:Bind Severity}" Style="{StaticResource MetaLabelStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Top" />
-                                                                                             <TextBlock Grid.Column="1" Text="{x:Bind Description}" Style="{StaticResource MetricSecondaryStyle}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="36" />
-                                                                                             <StackPanel Grid.Column="2" Width="150" Spacing="1" HorizontalAlignment="Right">
-                                                                                                 <TextBlock Text="DETECTED" Style="{StaticResource MetaLabelStyle}" HorizontalAlignment="Right" />
-                                                                                                 <TextBlock Text="{x:Bind DetectedAtText}" Style="{StaticResource MonoDetailStyle}" HorizontalAlignment="Right" TextTrimming="CharacterEllipsis" />
-                                                                                             </StackPanel>
-                                                                                         </Grid>
-                                                                                         <TextBlock Grid.Row="1" Text="{x:Bind RootCause}" Style="{StaticResource MonoDetailStyle}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="32" />
-                                                                                         <TextBlock Grid.Row="2" Text="{x:Bind Recommendation}" Style="{StaticResource SecondaryTextStyle}" FontSize="11" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="32" />
-                                                                                     </Grid>
-                                                                                 </Border>
-                                                                             </DataTemplate>
-                                                                         </ItemsControl.ItemTemplate>
-                                                                     </ItemsControl>
-                                                                 </StackPanel>
-                                                             </DataTemplate>
-                                                         </ItemsControl.ItemTemplate>
-                                                     </ItemsControl>
-                                                </StackPanel>
+                        <StackPanel Spacing="10" Visibility="{x:Bind ViewModel.HasAuditData, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding [Priorityfindings], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                    <TextBlock Text="{Binding [Startherehighestseveritymostrepeatedandnewestevidence], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{Binding [Top5], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                            </Grid>
+                            <ItemsControl ItemsSource="{x:Bind ViewModel.PriorityFindings, Mode=OneWay}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:AuditIssueEnhanced">
+                                        <Button Tag="{x:Bind}"
+                                                Click="OnFindingClick"
+                                                Margin="0,0,0,8"
+                                                Padding="0"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Stretch"
+                                                AutomationProperties.Name="{Binding [Openfindingdetails], Source={StaticResource AppText}}"
+                                                ToolTipService.ToolTip="{Binding [Openfindingdetails], Source={StaticResource AppText}}">
+                                            <Border Style="{StaticResource FindingCardStyle}" Padding="14,12">
+                                                <Grid ColumnDefinitions="4,*">
+                                                    <Border Grid.Column="0" Background="{ThemeResource SeverityHighFillBrush}" CornerRadius="4" Visibility="{x:Bind IsHigh, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                    <Border Grid.Column="0" Background="{ThemeResource SeverityMediumFillBrush}" CornerRadius="4" Visibility="{x:Bind IsMedium, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                    <Border Grid.Column="0" Background="{ThemeResource SeverityLowFillBrush}" CornerRadius="4" Visibility="{x:Bind IsLow, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                    <StackPanel Grid.Column="1" Spacing="5" Padding="10,0,0,0">
+                                                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                                            <TextBlock Text="{x:Bind SeverityText}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                                            <TextBlock Grid.Column="1" Text="{x:Bind CategoryLabel}" Style="{StaticResource CaptionTextStyle}" />
+                                                            <TextBlock Grid.Column="2" Text="{x:Bind EventTimestampText}" Style="{StaticResource CaptionTextStyle}" />
+                                                        </Grid>
+                                                        <TextBlock Text="{x:Bind DisplayTitle}" Style="{StaticResource BodyStrongTextStyle}" TextWrapping="Wrap" TextTrimming="None" />
+                                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" RowDefinitions="Auto,Auto,Auto" RowSpacing="3">
+                                                            <TextBlock Text="{Binding [Why], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                                            <TextBlock Grid.Column="1" Text="{x:Bind PriorityReasonText}" Style="{StaticResource BodySmallTextStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                                            <TextBlock Grid.Row="1" Text="{Binding [Action], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind PriorityActionText}" Style="{StaticResource BodySmallTextStyle}" TextWrapping="Wrap" />
+                                                            <TextBlock Grid.Row="2" Text="{Binding [Evidence], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{x:Bind EvidenceSummaryText}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </Grid>
                                             </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
-                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Visibility="{x:Bind ViewModel.ShowEmptyIssues, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                                <FontIcon Glyph="&#xE73E;" FontSize="30" Foreground="{ThemeResource SystemFillColorSuccessBrush}" HorizontalAlignment="Center" />
-                                <TextBlock Text="No security issues detected" Style="{StaticResource MetricSecondaryStyle}" HorizontalAlignment="Center" />
-                                <TextBlock Text="The latest audit did not report any findings." FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center" />
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <Border Style="{StaticResource InsetWellStyle}" Padding="12,10" AutomationProperties.Name="{Binding [Auditcoverage], Source={StaticResource AppText}}">
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="{x:Bind ViewModel.CoverageState, Mode=OneWay}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.CoverageText, Mode=OneWay}" Style="{StaticResource BodySmallTextStyle}" TextWrapping="Wrap" />
                             </StackPanel>
-                        </Grid>
-                    </Grid>
+                        </Border>
+
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.FindingSections, Mode=OneWay}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:FindingSection">
+                                    <Expander Margin="0,0,0,8"
+                                              HorizontalAlignment="Stretch"
+                                              HorizontalContentAlignment="Stretch"
+                                              IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}"
+                                              AutomationProperties.Name="{x:Bind Name}">
+                                        <Expander.Header>
+                                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="18" Padding="0,10" HorizontalAlignment="Stretch">
+                                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                                    <TextBlock Text="{x:Bind Name}" Style="{StaticResource BodyStrongTextStyle}" />
+                                                    <TextBlock Text="{x:Bind SeveritySummary}" Style="{StaticResource CaptionTextStyle}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                                                    <Border Width="{x:Bind HighBarWidth}" Height="6" CornerRadius="3" Background="{ThemeResource SeverityHighFillBrush}" Visibility="{x:Bind HasHigh, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                    <Border Width="{x:Bind MediumBarWidth}" Height="6" CornerRadius="3" Background="{ThemeResource SeverityMediumFillBrush}" Visibility="{x:Bind HasMedium, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                    <Border Width="{x:Bind LowBarWidth}" Height="6" CornerRadius="3" Background="{ThemeResource SeverityLowFillBrush}" Visibility="{x:Bind HasLow, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="2" Text="{x:Bind CountLabel}" Style="{StaticResource CaptionTextStyle}" MinWidth="76" TextAlignment="Right" VerticalAlignment="Center" />
+                                            </Grid>
+                                        </Expander.Header>
+
+                                        <ItemsControl ItemsSource="{x:Bind Issues}" Margin="0,4,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="models:AuditIssueEnhanced">
+                                                    <Button Tag="{x:Bind}"
+                                                            Click="OnFindingClick"
+                                                            Margin="0,0,0,8"
+                                                            Padding="0"
+                                                            Background="Transparent"
+                                                            BorderThickness="0"
+                                                            HorizontalAlignment="Stretch"
+                                                            HorizontalContentAlignment="Stretch"
+                                                            AutomationProperties.Name="{Binding [Openfindingdetails], Source={StaticResource AppText}}"
+                                                            ToolTipService.ToolTip="{Binding [Openfindingdetails], Source={StaticResource AppText}}">
+                                                        <Border Style="{StaticResource FindingCardStyle}">
+                                                            <Grid ColumnDefinitions="4,*">
+                                                                <Border CornerRadius="5,0,0,5" Background="{ThemeResource SeverityHighFillBrush}" Visibility="{x:Bind IsHigh, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                <Border CornerRadius="5,0,0,5" Background="{ThemeResource SeverityMediumFillBrush}" Visibility="{x:Bind IsMedium, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                <Border CornerRadius="5,0,0,5" Background="{ThemeResource SeverityLowFillBrush}" Visibility="{x:Bind IsLow, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                                                                <StackPanel Grid.Column="1" Spacing="6" Padding="14,12,16,12">
+                                                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                                                        <TextBlock Text="{Binding [High], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" Foreground="{ThemeResource SeverityHighTextBrush}" Visibility="{x:Bind IsHigh, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Text="{Binding [Medium], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" Foreground="{ThemeResource SeverityMediumTextBrush}" Visibility="{x:Bind IsMedium, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Text="{Binding [Low], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" Foreground="{ThemeResource SeverityLowTextBrush}" Visibility="{x:Bind IsLow, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Grid.Column="1" Text="{x:Bind EventIdLabel}" Style="{StaticResource CaptionTextStyle}" Visibility="{x:Bind HasEventId, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Grid.Column="2" Text="{x:Bind EventTimestampText}" Style="{StaticResource CaptionTextStyle}" />
+                                                                    </Grid>
+                                                                    <TextBlock Text="{x:Bind DisplayTitle}" Style="{StaticResource BodyStrongTextStyle}" TextWrapping="Wrap" TextTrimming="None" />
+                                                                    <TextBlock Text="{x:Bind DisplayDescription}" Style="{StaticResource BodySmallTextStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="{x:Bind HasDisplayDescription, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                    <Grid ColumnDefinitions="52,*" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="4" Margin="0,2,0,0">
+                                                                        <TextBlock Grid.Row="0" Text="{Binding [Cause], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" Visibility="{x:Bind HasRootCause, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{x:Bind RootCause}" Style="{StaticResource BodySmallTextStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="{x:Bind HasRootCause, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Grid.Row="1" Text="{Binding [Action], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" Visibility="{x:Bind HasRecommendation, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind Recommendation}" Style="{StaticResource BodySmallTextStyle}" Visibility="{x:Bind HasRecommendation, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                    </Grid>
+                                                                    <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,2,0,0">
+                                                                        <TextBlock Text="{x:Bind OccurrencesLabel}" Style="{StaticResource CaptionTextStyle}" Visibility="{x:Bind HasOccurrences, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Text="{x:Bind ConfidenceLabel}" Style="{StaticResource CaptionTextStyle}" Visibility="{x:Bind HasConfidence, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                        <TextBlock Text="{x:Bind Affected}" Style="{StaticResource CaptionTextStyle}" Visibility="{x:Bind HasAffected, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                                    </StackPanel>
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </Border>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <StackPanel Padding="0,28" Spacing="6" HorizontalAlignment="Center" Visibility="{x:Bind ViewModel.ShowNoAudit, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <FontIcon Glyph="&#xE9D9;" FontSize="26" Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding [Noaudityet], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding [Runafastscantocheckrecenteventsorafullscanforthepast24hours], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" HorizontalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Padding="0,28" Spacing="6" HorizontalAlignment="Center" Visibility="{x:Bind ViewModel.ShowEmptyIssues, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <FontIcon Glyph="&#xE73E;" FontSize="26" Foreground="{ThemeResource HealthGoodBrush}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding [Nofindingsinthelatestaudit], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding [Thescannedeventsdidnotproduceanythingtoreview], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" HorizontalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Padding="0,20" Spacing="4" HorizontalAlignment="Center" Visibility="{x:Bind ViewModel.ShowNoFilterMatches, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock Text="{Binding [Nothingatthisseverity], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding [Chooseanotherseverityorshowallfindings], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" HorizontalAlignment="Center" />
+                        </StackPanel>
+                    </StackPanel>
                 </Border>
-            </Grid>
+            </StackPanel>
         </ScrollViewer>
     </Grid>
 </Page>

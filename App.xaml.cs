@@ -11,6 +11,7 @@ namespace LocalSecurityAudit;
 public partial class App : Application
 {
     private IHost _host;
+    private MainWindow? _mainWindow;
 
     public static new App Current => (App)Application.Current;
     public IServiceProvider Services => _host.Services;
@@ -43,14 +44,36 @@ public partial class App : Application
             })
             .Build();
 
-        // Start hosted services manually
-        _host.StartAsync();
     }
 
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        var mainWindow = _host.Services.GetRequiredService<MainWindow>();
-        mainWindow.Activate();
+        try
+        {
+            // WinUI 1.4 cannot access Application.Resources in the App constructor.
+            Resources["AppText"] = AppText.Current;
+            _mainWindow = _host.Services.GetRequiredService<MainWindow>();
+            _mainWindow.Activate();
+            await _host.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            _host.Services.GetRequiredService<DiagnosticLogService>()
+                .WriteException("Main window startup failed", ex);
+            throw;
+        }
+    }
+
+    /// <summary>Brings the existing window to the front when a second launch is redirected here.</summary>
+    public void ActivateMainWindow()
+    {
+        var window = _mainWindow;
+        if (window == null)
+        {
+            return;
+        }
+
+        window.DispatcherQueue.TryEnqueue(window.BringToFront);
     }
 
     public static T GetService<T>() where T : class

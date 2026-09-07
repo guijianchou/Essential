@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using LocalSecurityAudit.Models;
@@ -19,6 +20,24 @@ public sealed partial class SettingsPage : Page
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        // "--section=ai" (used by tooling) opens a specific settings section.
+        string? requestedSection = Environment.GetCommandLineArgs()
+            .Select(argument => argument.Trim())
+            .FirstOrDefault(argument => argument.StartsWith("--section=", StringComparison.OrdinalIgnoreCase))
+            ?["--section=".Length..].ToLowerInvariant();
+        if (requestedSection != null)
+        {
+            var requestedItem = NavView.MenuItems
+                .OfType<NavigationViewItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), requestedSection, StringComparison.OrdinalIgnoreCase));
+            if (requestedItem != null)
+            {
+                NavView.SelectedItem = requestedItem;
+                ShowSection(requestedSection);
+                return;
+            }
+        }
+
         if (NavView.SelectedItem is NavigationViewItem selectedItem
             && selectedItem.Tag is string selectedTag)
         {

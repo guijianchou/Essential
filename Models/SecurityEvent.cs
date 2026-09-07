@@ -4,7 +4,9 @@ namespace LocalSecurityAudit.Models;
 
 public class SecurityEvent
 {
+    public string EventRef { get; set; } = string.Empty;
     public int EventId { get; set; }
+    public long? EventRecordId { get; set; }
     public DateTime Timestamp { get; set; }
     public string LogName { get; set; } = string.Empty;
     public string Source { get; set; } = string.Empty;

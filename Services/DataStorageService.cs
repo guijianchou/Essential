@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using LocalSecurityAudit.Models;
@@ -225,5 +227,57 @@ public class DataStorageService
         var countCmd = connection.CreateCommand();
         countCmd.CommandText = "SELECT COUNT(*) FROM AuditResults";
         return Convert.ToInt32(await countCmd.ExecuteScalarAsync());
+    }
+
+    public async Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> GetLegacyFindingsAsync()
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Id, FindingsJson FROM AuditResults ORDER BY Timestamp DESC";
+        using var reader = await command.ExecuteReaderAsync();
+        var results = new List<(long, string, List<AuditIssue>)>();
+        while (await reader.ReadAsync())
+        {
+            string json = reader.GetString(1);
+            var findings = JsonSerializer.Deserialize<List<AuditIssue>>(json) ?? new();
+            if (findings.Any(issue => !issue.HasBilingualText))
+                results.Add((reader.GetInt64(0), json, findings));
+        }
+        return results;
+    }
+
+    public async Task<bool> UpdateTranslatedFindingsAsync(long id, string originalJson, IReadOnlyList<AuditIssue> findings)
+    {
+        if (!findings.Any(issue => issue.HasBilingualText)) return false;
+        if (JsonNode.Parse(originalJson) is not JsonArray storedFindings
+            || storedFindings.Count != findings.Count
+            || storedFindings.Any(node => node is not JsonObject)) return false;
+
+        // Patch text in the original JSON so evidence and unrecognized legacy fields survive.
+        for (int i = 0; i < findings.Count; i++)
+        {
+            var stored = storedFindings[i]!;
+            var translated = findings[i];
+            if (!translated.HasBilingualText) continue;
+            stored[nameof(AuditIssue.Title)] = translated.Title;
+            stored[nameof(AuditIssue.Description)] = translated.Description;
+            stored[nameof(AuditIssue.RootCause)] = translated.RootCause;
+            stored[nameof(AuditIssue.Recommendation)] = translated.Recommendation;
+            stored[nameof(AuditIssue.TitleZh)] = translated.TitleZh;
+            stored[nameof(AuditIssue.DescriptionZh)] = translated.DescriptionZh;
+            stored[nameof(AuditIssue.RootCauseZh)] = translated.RootCauseZh;
+            stored[nameof(AuditIssue.RecommendationZh)] = translated.RecommendationZh;
+        }
+
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+        using var command = connection.CreateCommand();
+        // Only the text payload changes, and a concurrently edited row is left alone.
+        command.CommandText = "UPDATE AuditResults SET FindingsJson=@translated WHERE Id=@id AND FindingsJson=@original";
+        command.Parameters.AddWithValue("@translated", storedFindings.ToJsonString());
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@original", originalJson);
+        return await command.ExecuteNonQueryAsync() == 1;
     }
 }

@@ -13,10 +13,12 @@
     <Nullable>enable</Nullable>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <Content Include="Assets\**" />
+    <EmbeddedResource Include="Resources\Strings.zh-CN.json" WithCulture="false" LogicalName="LocalSecurityAudit.Resources.Strings.zh-CN.json" />
   </ItemGroup>
 
   <ItemGroup>

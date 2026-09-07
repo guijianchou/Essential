@@ -19,6 +19,8 @@ public class AuditSchedulerService : IHostedService, IDisposable
     private readonly DiagnosticLogService _diagnosticLogService;
     private Task? _runningTask;
     private Task? _initialTask;
+    private Task? _historyTask;
+    private CancellationTokenSource? _historyCts;
     private CancellationTokenSource? _cts;
     private CancellationTokenSource? _loopCts;
     private readonly object _lifecycleLock = new();
@@ -26,10 +28,14 @@ public class AuditSchedulerService : IHostedService, IDisposable
     private readonly List<RetiredLoop> _retiredLoops = new();
     private DateTime _lastScanTime = DateTime.MinValue;
     private bool _isStopping;
+    private int _scheduledIntervalHours;
+    private AuditStage _currentStage;
+    public bool IsScanning { get; private set; }
 
     public event EventHandler<AuditCompletedEventArgs>? AuditCompleted;
     public event EventHandler<AuditFailedEventArgs>? AuditFailed;
     public event EventHandler<AuditProgressEventArgs>? AuditProgress;
+    public event EventHandler? HistoryUpdated;
 
     public AuditSchedulerService(
         EventLogService eventLogService,
@@ -43,6 +49,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
         _storageService = storageService;
         _settingsService = settingsService;
         _diagnosticLogService = diagnosticLogService;
+        _scheduledIntervalHours = settingsService.Current.ScanIntervalHours;
         _settingsService.SettingsChanged += OnSettingsChanged;
     }
 
@@ -172,6 +179,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
     {
         Task? initialTask;
         Task? runningTask;
+        Task? historyTask;
         CancellationTokenSource? loopCts;
         CancellationTokenSource? cts;
         List<RetiredLoop> retiredLoops;
@@ -181,11 +189,13 @@ public class AuditSchedulerService : IHostedService, IDisposable
             _isStopping = true;
             initialTask = _initialTask;
             runningTask = _runningTask;
+            historyTask = _historyTask;
             loopCts = _loopCts;
             cts = _cts;
 
             loopCts?.Cancel();
             cts?.Cancel();
+            _historyCts?.Cancel();
             retiredLoops = _retiredLoops.ToList();
             foreach (var retiredLoop in retiredLoops)
             {
@@ -202,6 +212,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
         var tasks = new List<Task>();
         if (initialTask != null) tasks.Add(ObserveTaskAsync(initialTask));
         if (runningTask != null) tasks.Add(ObserveTaskAsync(runningTask));
+        if (historyTask != null) tasks.Add(ObserveTaskAsync(historyTask));
         tasks.AddRange(retiredLoops.Select(loop => ObserveTaskAsync(loop.Task)));
 
         var completion = Task.WhenAll(tasks);
@@ -269,6 +280,8 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
+        if (_scheduledIntervalHours == _settingsService.Current.ScanIntervalHours) return;
+        _scheduledIntervalHours = _settingsService.Current.ScanIntervalHours;
         RestartScheduleLoop();
     }
 
@@ -280,7 +293,9 @@ public class AuditSchedulerService : IHostedService, IDisposable
         var stopwatch = Stopwatch.StartNew();
         try
         {
+            await PauseHistoryTranslationAsync();
             cancellationToken.ThrowIfCancellationRequested();
+            IsScanning = true;
             DateTime endTime = DateTime.UtcNow;
             DateTime startTime;
 
@@ -302,31 +317,33 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
             _diagnosticLogService.Write(
                 $"Audit started: type={(fastScan ? "fast" : "full")}, from={startTime:O}, to={endTime:O}");
-            ReportProgress(fastScan
+            ReportProgress(new(AuditStage.Collect, AuditStepState.Active, fastScan
                 ? "Fast scan: reading Windows event logs..."
-                : "Full scan: reading Windows event logs...");
+                : "Full scan: reading Windows event logs..."));
             var events = await _eventLogService.ReadAllEventsAsync(startTime, endTime, cancellationToken);
             _diagnosticLogService.Write(
                 $"Event log read completed: type={(fastScan ? "fast" : "full")}, events={events.Count}, elapsedMs={stopwatch.ElapsedMilliseconds}");
+            ReportProgress(new(AuditStage.Collect, AuditStepState.Done, "{0:N0} events collected", events.Count));
 
             // Analyze with AI when there is data. An empty event window is still
             // a completed audit and must be persisted so the dashboard gives
             // the user a visible result instead of appearing to do nothing.
             cancellationToken.ThrowIfCancellationRequested();
             List<AuditIssue> issues;
+            int analyzedEventCount = 0;
             if (events.Count == 0)
             {
-                ReportProgress("No matching events found. Saving an empty audit result...");
+                ReportProgress(new(AuditStage.Route, AuditStepState.Skipped, "No events to analyze."));
+                ReportProgress(new(AuditStage.Analyze, AuditStepState.Skipped, "No events to analyze."));
                 issues = new List<AuditIssue>();
             }
             else
             {
-                ReportProgress($"Collected {events.Count:N0} events. Sending to AI...");
                 _diagnosticLogService.Write(
                     $"Audit sending events to AI: type={(fastScan ? "fast" : "full")}, events={events.Count}");
-                issues = await _aiAnalysisService.AnalyzeEventsAsync(
+                (issues, analyzedEventCount) = await _aiAnalysisService.AnalyzeEventsAsync(
                     events,
-                    new Progress<string>(ReportProgress),
+                    new AuditProgressReporter(ReportProgress),
                     cancellationToken);
             }
 
@@ -343,24 +360,38 @@ public class AuditSchedulerService : IHostedService, IDisposable
                 Metadata = new()
                 {
                     { "EventCount", JsonSerializer.SerializeToElement(events.Count) },
+                    { "AnalyzedEventCount", JsonSerializer.SerializeToElement(analyzedEventCount) },
+                    { "FilteredEventCount", JsonSerializer.SerializeToElement(events.Count - analyzedEventCount) },
+                    { "DurationMs", JsonSerializer.SerializeToElement(stopwatch.ElapsedMilliseconds) },
                     { "TimeRange", JsonSerializer.SerializeToElement($"{startTime:yyyy-MM-dd HH:mm} - {endTime:yyyy-MM-dd HH:mm}") },
-                    { "ScanType", JsonSerializer.SerializeToElement(fastScan ? "Fast Scan" : "Full Scan") }
+                    { "ScanType", JsonSerializer.SerializeToElement(fastScan ? "Fast Scan" : "Full Scan") },
+                    { "ScanStart", JsonSerializer.SerializeToElement(startTime.ToUniversalTime().ToString("O")) },
+                    { "ScanEnd", JsonSerializer.SerializeToElement(endTime.ToUniversalTime().ToString("O")) }
                 }
             };
 
-            ReportProgress("Saving audit result...");
+            ReportProgress(new(AuditStage.Save, AuditStepState.Active, "Saving audit result..."));
             await _storageService.SaveAuditResultAsync(result);
             _diagnosticLogService.Write(
                 $"Audit result saved: type={(fastScan ? "fast" : "full")}, events={events.Count}, issues={issues.Count}, elapsedMs={stopwatch.ElapsedMilliseconds}");
-            cancellationToken.ThrowIfCancellationRequested();
-            await _storageService.CleanupOldDataAsync(_settingsService.Current.RetentionDays);
-
             // Update last scan time
             _lastScanTime = endTime;
 
             // Notify UI
+            IsScanning = false;
+            ReportProgress(new(AuditStage.Save, AuditStepState.Done, "Saved at {0:t}", result.Timestamp.ToLocalTime()));
             AuditCompleted?.Invoke(this, new AuditCompletedEventArgs(result));
-            ReportProgress($"{(fastScan ? "Fast" : "Full")} scan completed.");
+            if (analyzedEventCount > 0)
+            {
+                StartHistoryTranslation();
+            }
+            else
+            {
+                ReportProgress(new(AuditStage.Translate, AuditStepState.Skipped, "No new analysis to translate."));
+                ReportProgress(new(AuditStage.Complete, AuditStepState.Done, "Scan saved / not assessed"));
+            }
+            try { await _storageService.CleanupOldDataAsync(_settingsService.Current.RetentionDays); }
+            catch (Exception ex) { _diagnosticLogService.WriteException("Retention cleanup failed; the audit is saved", ex); }
             _diagnosticLogService.Write(
                 $"Audit completed: type={(fastScan ? "fast" : "full")}, events={events.Count}, issues={issues.Count}, elapsedMs={stopwatch.ElapsedMilliseconds}");
             return true;
@@ -369,6 +400,8 @@ public class AuditSchedulerService : IHostedService, IDisposable
         {
             _diagnosticLogService.Write(
                 $"Audit canceled: type={(fastScan ? "fast" : "full")}, elapsedMs={stopwatch.ElapsedMilliseconds}");
+            IsScanning = false;
+            ReportProgress(new(_currentStage, AuditStepState.Failed, "Scan canceled."));
             throw;
         }
         catch (Exception ex)
@@ -376,18 +409,106 @@ public class AuditSchedulerService : IHostedService, IDisposable
             _diagnosticLogService.WriteException(
                 $"Audit failed: type={(fastScan ? "fast" : "full")}, elapsedMs={stopwatch.ElapsedMilliseconds}",
                 ex);
+            IsScanning = false;
+            ReportProgress(new(_currentStage, AuditStepState.Failed, "Scan failed: {0}", ex.Message));
             AuditFailed?.Invoke(this, new AuditFailedEventArgs(ex.Message));
             return false;
         }
         finally
         {
+            IsScanning = false;
             _auditGate.Release();
         }
     }
 
-    private void ReportProgress(string message)
+    private void ReportProgress(AuditProgressEventArgs progress)
     {
-        AuditProgress?.Invoke(this, new AuditProgressEventArgs(message));
+        if (progress.State == AuditStepState.Active && progress.Stage != AuditStage.Translate)
+            _currentStage = progress.Stage;
+        AuditProgress?.Invoke(this, progress);
+    }
+
+    private async Task PauseHistoryTranslationAsync()
+    {
+        Task? historyTask;
+        lock (_lifecycleLock)
+        {
+            _historyCts?.Cancel();
+            historyTask = _historyTask;
+        }
+        if (historyTask != null) await historyTask.ConfigureAwait(false);
+    }
+
+    private void StartHistoryTranslation()
+    {
+        lock (_lifecycleLock)
+        {
+            if (_isStopping || _historyTask is { IsCompleted: false }) return;
+            var source = CancellationTokenSource.CreateLinkedTokenSource(_cts?.Token ?? CancellationToken.None);
+            _historyCts = source;
+            _historyTask = Task.Run(async () =>
+            {
+                try { await UpgradeLegacyFindingsAsync(source.Token).ConfigureAwait(false); }
+                finally
+                {
+                    lock (_lifecycleLock)
+                    {
+                        if (ReferenceEquals(_historyCts, source)) _historyCts = null;
+                        source.Dispose();
+                    }
+                }
+            });
+        }
+    }
+
+    private async Task UpgradeLegacyFindingsAsync(CancellationToken cancellationToken)
+    {
+        string status = "English + Simplified Chinese saved";
+        var state = AuditStepState.Done;
+        try
+        {
+            var records = await _storageService.GetLegacyFindingsAsync();
+            if (records.Count == 0) return;
+            try
+            {
+                await _aiAnalysisService.TranslateLegacyFindingsAsync(
+                    records.SelectMany(record => record.Findings).ToList(),
+                    new AuditProgressReporter(ReportProgress), cancellationToken);
+                status = "Historical findings are now available in both languages.";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                status = "Historical translation paused for the next scan.";
+                state = AuditStepState.Skipped;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _diagnosticLogService.WriteException("Historical translation deferred until the next scan", ex);
+                status = "Historical translation failed. It will retry after the next scan.";
+                state = AuditStepState.Failed;
+            }
+
+            bool updated = false;
+            // Persist finished batches even when translation was interrupted by a new scan.
+            foreach (var record in records)
+            {
+                updated |= await _storageService.UpdateTranslatedFindingsAsync(record.Id, record.OriginalJson, record.Findings);
+            }
+            if (updated) HistoryUpdated?.Invoke(this, EventArgs.Empty);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _diagnosticLogService.WriteException("Historical translation could not be saved; the audit remains valid", ex);
+            status = "Historical translation failed. It will retry after the next scan.";
+            state = AuditStepState.Failed;
+        }
+        finally
+        {
+            ReportProgress(new(AuditStage.Translate, state, status));
+            ReportProgress(new(AuditStage.Complete, AuditStepState.Done,
+                state == AuditStepState.Done ? "Scan complete" : "Scan saved / translation pending"));
+        }
     }
 
     public void Dispose()
@@ -396,24 +517,9 @@ public class AuditSchedulerService : IHostedService, IDisposable
         _auditGate.Dispose();
     }
 
-    private int CalculateHealthScore(System.Collections.Generic.List<AuditIssue> issues)
+    private static int CalculateHealthScore(List<AuditIssue> issues)
     {
-        if (issues.Count == 0)
-        {
-            return 100;
-        }
-
-        // Calculate score based on issue count and severity
-        int highCount = issues.Count(i => i.Severity == "High");
-        int mediumCount = issues.Count(i => i.Severity == "Medium");
-        int lowCount = issues.Count(i => i.Severity == "Low");
-
-        // Deduct points: High=-20, Medium=-10, Low=-5
-        int deduction = (highCount * 20) + (mediumCount * 10) + (lowCount * 5);
-
-        int score = Math.Max(0, 100 - deduction);
-
-        return score;
+        return HealthScoreCalculator.Calculate(issues).Score;
     }
 
     private static async Task ObserveTaskAsync(Task task)

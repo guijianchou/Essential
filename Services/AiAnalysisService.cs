@@ -11,12 +11,13 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Globalization;
 using LocalSecurityAudit.Helpers;
 using LocalSecurityAudit.Models;
 
 namespace LocalSecurityAudit.Services;
 
-public sealed class AiAnalysisService
+public sealed partial class AiAnalysisService
 {
     private static readonly HttpClient HttpClient = new()
     {
@@ -25,14 +26,17 @@ public sealed class AiAnalysisService
 
     private const int NormalBatchSize = 30;
     private const int XHighBatchSize = 15;
-    private const int MaxBatchSize = 5;
+    private const int MinBatchSize = 20;
+    private const int MaxBatchSize = 50;
     private const int ConnectionTestTimeoutSeconds = 15;
     private const int LunaContextWindowTokens = 256_000;
-    private const int ResponseOutputTokenBudget = 2_000;
+    private const int ResponseOutputTokenBudget = 8_000;
     private const int ContextSafetyMarginTokens = 8_000;
     private const int MaxAgentInstructionChars = 32_000;
     private const int MaxEventDescriptionChars = 4_096;
     private const int MinEventDescriptionChars = 256;
+    private const int StreamingIdleTimeoutSeconds = 90;
+    private const int StreamingProgressIntervalSeconds = 5;
 
     // Known safe event IDs that can be skipped
     private static readonly HashSet<int> KnownSafeEventIds = new()
@@ -42,7 +46,7 @@ public sealed class AiAnalysisService
 
     private readonly SettingsService _settingsService;
     private readonly DiagnosticLogService _diagnosticLogService;
-    private readonly LruCache<string, List<AuditIssue>> _analysisCache = new(500);
+    private readonly LruCache<string, CachedBatchAnalysis> _analysisCache = new(100);
 
     public AiAnalysisService(
         SettingsService settingsService,
@@ -52,58 +56,73 @@ public sealed class AiAnalysisService
         _diagnosticLogService = diagnosticLogService;
     }
 
-    public async Task<List<AuditIssue>> AnalyzeEventsAsync(
+    public async Task<(List<AuditIssue> Issues, int AnalyzedEventCount)> AnalyzeEventsAsync(
         List<SecurityEvent> events,
-        IProgress<string>? progress = null,
+        IProgress<AuditProgressEventArgs>? progress = null,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (events.Count == 0)
         {
-            return new List<AuditIssue>();
+            return (new List<AuditIssue>(), 0);
         }
 
-        var target = _settingsService.Current.AiTargets.FirstOrDefault(item => item.IsActive)
-            ?? _settingsService.Current.AiTargets.FirstOrDefault();
-        if (target == null || string.IsNullOrWhiteSpace(target.BaseUrl))
+        progress?.Report(new(AuditStage.Route, AuditStepState.Active, "Selecting AI route..."));
+        var routes = GetAnalysisRoutes();
+        var mainTarget = routes.FirstOrDefault();
+        if (mainTarget == null || string.IsNullOrWhiteSpace(mainTarget.BaseUrl))
         {
-            throw new InvalidOperationException("Configure an AI target before running an audit.");
+            throw new InvalidOperationException(AppText.Get("Configure the Main AI route before running an audit."));
         }
 
-        progress?.Report("Filtering events...");
+        progress?.Report(new(AuditStage.Route, AuditStepState.Done, "{0} / {1}", mainTarget.Name, mainTarget.Model));
+        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Filtering events..."));
 
         // Apply smart filtering
         var filteredEvents = ApplySmartFiltering(events, out var filteredOut);
         _diagnosticLogService.Write($"Smart filtering: {events.Count} → {filteredEvents.Count} events ({filteredOut.Count} filtered)");
 
-        progress?.Report("Connecting to AI endpoint...");
+        if (filteredEvents.Count == 0)
+        {
+            progress?.Report(new(AuditStage.Analyze, AuditStepState.Skipped, "All events excluded by filtering."));
+            return (new List<AuditIssue>(), 0);
+        }
 
         // Calculate dynamic batch size
-        int batchSize = CalculateDynamicBatchSize(filteredEvents, target.Effort ?? "medium",
+        int batchSize = CalculateDynamicBatchSize(filteredEvents, mainTarget.Effort ?? "medium",
             LunaContextWindowTokens - ResponseOutputTokenBudget - ContextSafetyMarginTokens);
 
         int totalBatches = (int)Math.Ceiling(filteredEvents.Count / (double)batchSize);
         string systemPrompt = BuildSystemPrompt();
-        int contextWindowTokens = GetContextWindowTokens(target.Model);
+        int contextWindowTokens = GetContextWindowTokens(mainTarget.Model);
         int inputTokenBudget = Math.Max(
             1,
             contextWindowTokens - ResponseOutputTokenBudget - ContextSafetyMarginTokens);
         _diagnosticLogService.Write(
-            $"AI analysis started: target={target.Name}, model={target.Model}, mode={target.Mode}, effort={target.Effort}, originalEvents={events.Count}, filteredEvents={filteredEvents.Count}, dynamicBatchSize={batchSize}, batches={totalBatches}, contextWindowTokens={contextWindowTokens}, inputTokenBudget={inputTokenBudget}");
+            $"AI analysis started: main={mainTarget.Name}, model={mainTarget.Model}, mode={mainTarget.Mode}, effort={mainTarget.Effort}, fallback={(routes.Count > 1 ? routes[1].Name : "empty")}, originalEvents={events.Count}, filteredEvents={filteredEvents.Count}, dynamicBatchSize={batchSize}, batches={totalBatches}, contextWindowTokens={contextWindowTokens}, inputTokenBudget={inputTokenBudget}");
 
-        // Check for parallel processing setting
-        int maxParallel = _settingsService.Current.MaxConcurrentAnalysis;
+        int maxParallel = Math.Clamp(_settingsService.Current.MaxConcurrentAnalysis, 1, 4);
+        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "{0:N0} events / {1} parallel requests", filteredEvents.Count, maxParallel)
+        { TotalBatches = totalBatches });
+        var routeState = new AnalysisRouteState();
         if (maxParallel > 1)
         {
-            return await AnalyzeEventsParallelAsync(
+            var parallelIssues = await AnalyzeEventsParallelAsync(
                 filteredEvents,
-                target,
+                routes,
                 systemPrompt,
                 inputTokenBudget,
                 batchSize,
                 maxParallel,
+                routeState,
                 progress,
                 cancellationToken);
+            var mergedParallelIssues = MergeDuplicateIssues(parallelIssues);
+            _diagnosticLogService.Write(
+                $"AI analysis completed: main={mainTarget.Name}, route={(routeState.UseFallback ? routes[^1].Name : mainTarget.Name)}, events={events.Count}, rawIssues={parallelIssues.Count}, issues={mergedParallelIssues.Count}");
+            progress?.Report(new(AuditStage.Analyze, AuditStepState.Done, "{0} findings / English + Simplified Chinese", mergedParallelIssues.Count)
+            { CompletedBatches = totalBatches, TotalBatches = totalBatches });
+            return (mergedParallelIssues, filteredEvents.Count);
         }
 
         // Sequential processing (original)
@@ -113,20 +132,28 @@ public sealed class AiAnalysisService
             cancellationToken.ThrowIfCancellationRequested();
             var batch = filteredEvents.Skip(i).Take(batchSize).ToList();
             int currentBatch = (i / batchSize) + 1;
-            progress?.Report($"Analyzing ({currentBatch}/{totalBatches})...");
+            progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Analyzing ({0}/{1}): connecting to AI endpoint...", currentBatch, totalBatches)
+            { CompletedBatches = currentBatch - 1, TotalBatches = totalBatches });
 
             var stopwatch = Stopwatch.StartNew();
             try
             {
-                var issues = await AnalyzeBatchAsync(
-                    target,
+                var localIssues = await AnalyzeBatchWithCacheAsync(
+                    routes,
                     batch,
                     systemPrompt,
                     inputTokenBudget,
+                    routeState,
+                    progress,
                     cancellationToken);
+                var issues = RemapIssuesToIndexes(
+                    localIssues,
+                    Enumerable.Range(i, batch.Count).ToArray());
                 allIssues.AddRange(issues);
                 _diagnosticLogService.Write(
                     $"AI batch completed: batch={currentBatch}/{totalBatches}, events={batch.Count}, issues={issues.Count}, elapsedMs={stopwatch.ElapsedMilliseconds}");
+                progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Analyzing ({0}/{1}) complete: {2} issues found", currentBatch, totalBatches, issues.Count)
+                { CompletedBatches = currentBatch, TotalBatches = totalBatches });
             }
             catch (Exception ex)
             {
@@ -137,10 +164,12 @@ public sealed class AiAnalysisService
             }
         }
 
+        var mergedIssues = MergeDuplicateIssues(allIssues);
         _diagnosticLogService.Write(
-            $"AI analysis completed: target={target.Name}, events={events.Count}, issues={allIssues.Count}");
-        progress?.Report("Complete");
-        return allIssues;
+            $"AI analysis completed: main={mainTarget.Name}, route={(routeState.UseFallback ? routes[^1].Name : mainTarget.Name)}, events={events.Count}, rawIssues={allIssues.Count}, issues={mergedIssues.Count}");
+        progress?.Report(new(AuditStage.Analyze, AuditStepState.Done, "{0} findings / English + Simplified Chinese", mergedIssues.Count)
+        { CompletedBatches = totalBatches, TotalBatches = totalBatches });
+        return (mergedIssues, filteredEvents.Count);
     }
 
     public async Task<(bool Success, string Message)> TestConnectionAsync(AiTarget target)
@@ -148,7 +177,7 @@ public sealed class AiAnalysisService
         if (!Uri.TryCreate(target.BaseUrl?.Trim(), UriKind.Absolute, out var baseUri)
             || (baseUri.Scheme != Uri.UriSchemeHttps && baseUri.Scheme != Uri.UriSchemeHttp))
         {
-            return (false, "Enter a valid HTTP or HTTPS endpoint.");
+            return (false, AppText.Get("Enter a valid HTTP or HTTPS endpoint."));
         }
 
         try
@@ -168,32 +197,34 @@ public sealed class AiAnalysisService
                 $"AI connection test response: target={target.Name}, status={(int)response.StatusCode}, elapsedMs={stopwatch.ElapsedMilliseconds}");
             if (response.IsSuccessStatusCode)
             {
-                return (true, $"Connection OK ({(int)response.StatusCode}).");
+                return (true, AppText.Format("Connection OK ({0}).", (int)response.StatusCode));
             }
 
-            return (false, $"API returned {(int)response.StatusCode} ({response.ReasonPhrase}).");
+            return (false, AppText.Format("API returned {0} ({1}).", (int)response.StatusCode, response.ReasonPhrase));
         }
         catch (HttpRequestException ex)
         {
             _diagnosticLogService.WriteException(
                 $"AI connection test failed: target={target.Name}",
                 ex);
-            return (false, $"Connection failed: {FormatException(ex)}");
+            return (false, AppText.Format("Connection failed: {0}", FormatException(ex)));
         }
         catch (TaskCanceledException ex)
         {
             _diagnosticLogService.WriteException(
                 $"AI connection test timed out: target={target.Name}",
                 ex);
-            return (false, $"Connection timed out after {ConnectionTestTimeoutSeconds} seconds: {FormatException(ex)}");
+            return (false, AppText.Format("Connection timed out after {0} seconds: {1}", ConnectionTestTimeoutSeconds, FormatException(ex)));
         }
     }
 
     private async Task<List<AuditIssue>> AnalyzeBatchAsync(
-        AiTargetSettings target,
+        IReadOnlyList<AiTargetSettings> routes,
         List<SecurityEvent> events,
         string systemPrompt,
         int inputTokenBudget,
+        AnalysisRouteState routeState,
+        IProgress<AuditProgressEventArgs>? progress,
         CancellationToken cancellationToken)
     {
         string eventSummary = BuildEventSummary(
@@ -205,11 +236,13 @@ public sealed class AiAnalysisService
             out int omittedEventCount);
 
         _diagnosticLogService.Write(
-            $"AI request prepared: target={target.Name}, systemChars={systemPrompt.Length}, userChars={eventSummary.Length}, estimatedInputTokens={estimatedInputTokens}, truncatedDescriptions={truncatedDescriptionCount}, omittedEvents={omittedEventCount}");
+            $"AI request prepared: route={GetCurrentRouteName(routes, routeState)}, systemChars={systemPrompt.Length}, userChars={eventSummary.Length}, estimatedInputTokens={estimatedInputTokens}, truncatedDescriptions={truncatedDescriptionCount}, omittedEvents={omittedEventCount}");
         var response = await SendAnalysisRequestAsync(
-            target,
+            routes,
             systemPrompt,
             eventSummary,
+            routeState,
+            progress,
             cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
@@ -219,38 +252,84 @@ public sealed class AiAnalysisService
 
         string messageContent = response.IsStreaming
             ? response.Text
-            : ExtractMessageContent(response.Text, target.Mode);
-        IssuesResponse? issuesResponse;
+            : ExtractMessageContent(response.Text, response.Mode);
+        List<AuditIssue> issues;
         try
         {
-            issuesResponse = JsonSerializer.Deserialize<IssuesResponse>(
-                messageContent,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            issues = ParseIssuesPayload(messageContent);
+            if (issues.Any(issue => !issue.HasBilingualText))
+            {
+                throw new JsonException("Every finding must include complete English and Simplified Chinese analysis.");
+            }
         }
         catch (JsonException ex)
         {
-            throw new HttpRequestException(
-                "The AI endpoint returned invalid JSON in the analysis response.",
+            _diagnosticLogService.WriteException(
+                $"AI response did not match the findings contract: responseChars={messageContent.Length}",
                 ex);
+            throw new InvalidOperationException(AppText.Get("The AI response did not contain a valid findings result. Run the scan again."), ex);
         }
 
-        if (issuesResponse?.Issues == null)
-        {
-            return new List<AuditIssue>();
-        }
-
-        foreach (var issue in issuesResponse.Issues)
-        {
-            issue.DetectedAt = DateTime.UtcNow;
-        }
-
-        return issuesResponse.Issues;
+        return NormalizeIssues(issues, events);
     }
 
     private async Task<AnalysisResponsePayload> SendAnalysisRequestAsync(
+        IReadOnlyList<AiTargetSettings> routes,
+        string systemPrompt,
+        string userPrompt,
+        AnalysisRouteState routeState,
+        IProgress<AuditProgressEventArgs>? progress,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            bool usingFallback = routeState.UseFallback;
+            var target = GetCurrentRoute(routes, routeState);
+
+            try
+            {
+                var response = await SendAnalysisRequestToTargetAsync(
+                    target,
+                    systemPrompt,
+                    userPrompt,
+                    usingFallback ? 2 : routes.Count > 1 ? 1 : 3,
+                    progress,
+                    cancellationToken);
+                if (response.IsSuccessStatusCode
+                    || usingFallback
+                    || routes.Count < 2
+                    || !ShouldFailover(response.StatusCode))
+                {
+                    if (!usingFallback && routeState.UseFallback && !response.IsSuccessStatusCode)
+                    {
+                        continue;
+                    }
+
+                    return response;
+                }
+
+                SwitchToFallback(routes, routeState, target.Name,
+                    $"API returned {response.StatusCode} ({response.ReasonPhrase})");
+                progress?.Report(new(AuditStage.Route, AuditStepState.Done, "{0} unavailable; using {1}", target.Name, routes[1].Name));
+            }
+            catch (Exception ex) when (
+                !cancellationToken.IsCancellationRequested
+                && !usingFallback
+                && routes.Count >= 2
+                && IsFailoverException(ex))
+            {
+                SwitchToFallback(routes, routeState, target.Name, FormatException(ex));
+                progress?.Report(new(AuditStage.Route, AuditStepState.Done, "{0} unavailable; using {1}", target.Name, routes[1].Name));
+            }
+        }
+    }
+
+    private async Task<AnalysisResponsePayload> SendAnalysisRequestToTargetAsync(
         AiTargetSettings target,
         string systemPrompt,
         string userPrompt,
+        int maxRetries,
+        IProgress<AuditProgressEventArgs>? progress,
         CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(target.BaseUrl?.Trim(), UriKind.Absolute, out var baseUri)
@@ -284,7 +363,7 @@ public sealed class AiAnalysisService
 
         string endpoint = useResponses ? "v1/responses" : "v1/chat/completions";
         _diagnosticLogService.Write(
-            $"AI request dispatching: method=POST, endpoint={endpoint}, model={target.Model}, effort={target.Effort}");
+            $"AI request dispatching: route={target.Name}, method=POST, endpoint={endpoint}, model={target.Model}, effort={target.Effort}");
         return await RetryAsync(
             $"POST {endpoint}, model={target.Model}, effort={target.Effort}",
             async () =>
@@ -328,12 +407,17 @@ public sealed class AiAnalysisService
                         false,
                         0,
                         (int)response.StatusCode,
-                        response.ReasonPhrase);
+                        response.ReasonPhrase,
+                        target.Mode);
                 }
+
+                progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "AI endpoint connected ({0}); receiving analysis...", target.Name));
 
                 var payload = await ReadAnalysisResponseAsync(
                     response,
                     target.Mode,
+                    target.Name,
+                    progress,
                     requestTimeoutCts.Token);
                 _diagnosticLogService.Write(
                     $"AI request response: endpoint={endpoint}, status={(int)response.StatusCode}, streaming={payload.IsStreaming}, streamEvents={payload.StreamEventCount}, responseChars={payload.Text.Length}, elapsedMs={stopwatch.ElapsedMilliseconds}");
@@ -346,12 +430,14 @@ public sealed class AiAnalysisService
                     ex);
                 throw;
             }
-        }, cancellationToken);
+        }, cancellationToken, maxRetries);
     }
 
     private static async Task<AnalysisResponsePayload> ReadAnalysisResponseAsync(
         HttpResponseMessage response,
         string mode,
+        string routeName,
+        IProgress<AuditProgressEventArgs>? progress,
         CancellationToken cancellationToken)
     {
         bool isStreaming = string.Equals(
@@ -360,12 +446,15 @@ public sealed class AiAnalysisService
             StringComparison.OrdinalIgnoreCase);
         if (!isStreaming)
         {
+            string text = await response.Content.ReadAsStringAsync(cancellationToken);
+            progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "AI response received ({0}); parsing analysis...", routeName));
             return new AnalysisResponsePayload(
-                await response.Content.ReadAsStringAsync(cancellationToken),
+                text,
                 false,
                 0,
                 (int)response.StatusCode,
-                response.ReasonPhrase);
+                response.ReasonPhrase,
+                mode);
         }
 
         var output = new StringBuilder();
@@ -375,9 +464,42 @@ public sealed class AiAnalysisService
         using var reader = new StreamReader(responseStream, Encoding.UTF8);
         var dataLines = new List<string>();
         string eventName = string.Empty;
+        var streamStopwatch = Stopwatch.StartNew();
+        var lastProgressReport = TimeSpan.Zero;
 
-        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        while (true)
         {
+            using var lineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            lineCts.CancelAfter(TimeSpan.FromSeconds(StreamingIdleTimeoutSeconds));
+            Task<string?> lineTask = reader.ReadLineAsync(lineCts.Token).AsTask();
+            string? line;
+            while (true)
+            {
+                try
+                {
+                    line = await lineTask.WaitAsync(
+                        TimeSpan.FromSeconds(StreamingProgressIntervalSeconds), cancellationToken);
+                    break;
+                }
+                catch (TimeoutException) when (!lineTask.IsFaulted)
+                {
+                    lastProgressReport = streamStopwatch.Elapsed;
+                    progress?.Report(output.Length == 0
+                        ? new(AuditStage.Analyze, AuditStepState.Active, "AI endpoint connected ({0}); waiting for analysis data ({1:0}s)...", routeName, streamStopwatch.Elapsed.TotalSeconds)
+                        : new(AuditStage.Analyze, AuditStepState.Active, "Receiving AI response from {0} ({1:N0} characters, {2:0}s)...", routeName, output.Length, streamStopwatch.Elapsed.TotalSeconds));
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"The AI streaming response was idle for more than {StreamingIdleTimeoutSeconds} seconds.");
+                }
+            }
+
+            if (line == null)
+            {
+                break;
+            }
+
             if (line.Length == 0)
             {
                 if (ProcessServerSentEvent(
@@ -407,6 +529,13 @@ public sealed class AiAnalysisService
                 string data = line[5..];
                 dataLines.Add(data.StartsWith(' ') ? data[1..] : data);
             }
+
+            if (streamEventCount > 0 && streamStopwatch.Elapsed - lastProgressReport >= TimeSpan.FromSeconds(1))
+            {
+                lastProgressReport = streamStopwatch.Elapsed;
+                progress?.Report(new(AuditStage.Analyze, AuditStepState.Active,
+                    "Receiving AI response from {0} ({1:N0} characters, {2:0}s)...", routeName, output.Length, streamStopwatch.Elapsed.TotalSeconds));
+            }
         }
 
         if (dataLines.Count > 0)
@@ -420,18 +549,21 @@ public sealed class AiAnalysisService
                 ref receivedTerminalEvent);
         }
 
-        if (!receivedTerminalEvent)
+        if (!HasCompleteJsonOutput(output.ToString()))
         {
             throw new HttpRequestException(
-                "The AI streaming response ended before a terminal event was received.");
+                "The AI streaming response ended before a complete findings result was received.");
         }
+
+        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "AI response received from {0}; parsing analysis...", routeName));
 
         return new AnalysisResponsePayload(
             output.Length == 0 ? "{}" : output.ToString(),
             true,
             streamEventCount,
             (int)response.StatusCode,
-            response.ReasonPhrase);
+            response.ReasonPhrase,
+            mode);
     }
 
     private static bool ProcessServerSentEvent(
@@ -490,6 +622,11 @@ public sealed class AiAnalysisService
                 throw new HttpRequestException(errorMessage);
             }
 
+            if (eventType.Equals("response.incomplete", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new HttpRequestException("The AI endpoint reported an incomplete response.");
+            }
+
             if (string.Equals(mode, "responses", StringComparison.OrdinalIgnoreCase))
             {
                 if (eventType.Equals("response.output_text.delta", StringComparison.OrdinalIgnoreCase)
@@ -504,6 +641,13 @@ public sealed class AiAnalysisService
                     && TryGetString(root, "text", out var completedText))
                 {
                     output.Append(completedText);
+                }
+
+                if (eventType.Equals("response.output_text.done", StringComparison.OrdinalIgnoreCase)
+                    && HasCompleteJsonOutput(output.ToString()))
+                {
+                    receivedTerminalEvent = true;
+                    return true;
                 }
 
                 if (output.Length == 0 && TryGetString(root, "output_text", out var outputText))
@@ -553,6 +697,11 @@ public sealed class AiAnalysisService
                 if (choice.TryGetProperty("finish_reason", out var finishReason)
                     && finishReason.ValueKind != JsonValueKind.Null)
                 {
+                    if (!string.Equals(finishReason.GetString(), "stop", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new HttpRequestException("The AI endpoint stopped before completing the analysis.");
+                    }
+
                     receivedTerminalEvent = true;
                     return true;
                 }
@@ -607,36 +756,17 @@ public sealed class AiAnalysisService
         return false;
     }
 
-    private string BuildSystemPrompt()
+    private static bool HasCompleteJsonOutput(string text)
     {
-        string agentInstructions = CompactText(_settingsService.Current.AgentInstructions ?? string.Empty);
-        agentInstructions = TruncateText(agentInstructions, MaxAgentInstructionChars);
-
-        return """
-            You are a Windows security audit expert. Analyze the provided event logs and identify:
-            1. Abnormal login patterns
-            2. Privilege escalation risks
-            3. Firewall anomalies
-            4. System stability issues
-            5. Application, process, or program issues
-            6. Network activity and connectivity issues
-
-            Additional audit policy supplied by the user:
-            """ + agentInstructions + """
-
-            Return only JSON in this shape:
-            {
-              "issues": [
-                {
-                  "description": "Brief description",
-                  "severity": "High|Medium|Low",
-                  "category": "Login|Privilege|Firewall|System|Application|Network|Other",
-                  "rootCause": "Root cause analysis",
-                  "recommendation": "Recommended solution"
-                }
-              ]
-            }
-            """;
+        try
+        {
+            ParseIssuesPayload(text);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string BuildEventSummary(
@@ -659,6 +789,7 @@ public sealed class AiAnalysisService
             MinEventDescriptionChars,
             inputTokenBudget * 2 / Math.Max(events.Count, 1)));
 
+        int eventIndex = 0;
         foreach (var evt in events)
         {
             string description = CompactText(evt.Description ?? string.Empty);
@@ -669,20 +800,20 @@ public sealed class AiAnalysisService
                 truncatedDescriptionCount++;
             }
 
-            string eventText = FormatEvent(evt, compactDescription);
+            string eventText = FormatEvent(evt, compactDescription, $"event-{eventIndex++}");
             while (EstimateTokenCount(contextPrefix + summary + eventText)
                 > inputTokenBudget
                 && eventDescriptionLimit > MinEventDescriptionChars)
             {
                 eventDescriptionLimit = Math.Max(MinEventDescriptionChars, eventDescriptionLimit / 2);
                 compactDescription = TruncateText(description, eventDescriptionLimit);
-                eventText = FormatEvent(evt, compactDescription);
+                eventText = FormatEvent(evt, compactDescription, $"event-{eventIndex - 1}");
             }
 
             if (EstimateTokenCount(contextPrefix + summary + eventText)
                 > inputTokenBudget)
             {
-                eventText = FormatEvent(evt, "[Description omitted because the context budget was reached]");
+                eventText = FormatEvent(evt, "[Description omitted because the context budget was reached]", $"event-{eventIndex - 1}");
             }
 
             if (EstimateTokenCount(contextPrefix + summary + eventText) <= inputTokenBudget)
@@ -708,18 +839,20 @@ public sealed class AiAnalysisService
         return summary.ToString();
     }
 
-    private static string FormatEvent(SecurityEvent evt, string description)
+    private static string FormatEvent(SecurityEvent evt, string description, string eventRef)
     {
         var eventText = new StringBuilder();
-        eventText.Append("- [");
-        eventText.Append(evt.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"));
-        eventText.Append("] ");
+        eventText.Append("- eventRef=");
+        eventText.Append(eventRef);
+        eventText.Append(" | timestamp=");
+        eventText.Append(evt.Timestamp.ToUniversalTime().ToString("O"));
+        eventText.Append(" | log=");
         eventText.Append(TruncateText(CompactText(evt.LogName), 128));
         eventText.Append(" | source=");
         eventText.Append(TruncateText(CompactText(evt.Source), 128));
         eventText.Append(" | eventId=");
         eventText.Append(evt.EventId);
-        eventText.Append(" | severity=");
+        eventText.Append(" | level=");
         eventText.Append(TruncateText(CompactText(evt.Severity), 64));
         if (!string.IsNullOrWhiteSpace(evt.UserName))
         {
@@ -978,7 +1111,7 @@ public sealed class AiAnalysisService
         int dynamicBatch = (int)(estimatedEventsPerBatch * effortMultiplier);
 
         // Clamp to reasonable bounds
-        return Math.Clamp(dynamicBatch, 5, 50);
+        return Math.Clamp(dynamicBatch, MinBatchSize, MaxBatchSize);
     }
 
     private List<SecurityEvent> ApplySmartFiltering(List<SecurityEvent> events, out List<SecurityEvent> filteredOut)
@@ -1014,76 +1147,122 @@ public sealed class AiAnalysisService
             }
             else if (severity.Contains("warning"))
             {
-                // Analyze 70% of warnings (clustered)
-                var clustered = ClusterSimilarEvents(groupEvents);
-                int take = (int)(clustered.Count * 0.7);
-                toAnalyze.AddRange(clustered.Take(take));
-                filteredOut.AddRange(clustered.Skip(take));
+                toAnalyze.AddRange(SelectRepresentativeEvents(groupEvents, 3));
             }
             else if (severity.Contains("information"))
             {
-                // Analyze 20% of info events (unique patterns only)
-                var unique = FilterUniquePatterns(groupEvents);
-                int take = (int)(unique.Count * 0.2);
-                toAnalyze.AddRange(unique.Take(take));
-                filteredOut.AddRange(groupEvents.Except(toAnalyze));
+                toAnalyze.AddRange(SelectRepresentativeEvents(groupEvents, 1));
             }
             else
             {
-                // Unknown severity: analyze 50%
-                toAnalyze.AddRange(groupEvents.Take(groupEvents.Count / 2));
-                filteredOut.AddRange(groupEvents.Skip(groupEvents.Count / 2));
+                toAnalyze.AddRange(groupEvents);
             }
         }
 
+        filteredOut = events.Except(toAnalyze).ToList();
         return toAnalyze;
     }
 
-    private List<SecurityEvent> ClusterSimilarEvents(List<SecurityEvent> events)
+    private static IEnumerable<SecurityEvent> SelectRepresentativeEvents(List<SecurityEvent> events, int samplesPerPattern)
     {
-        // Group by EventId + Source, take representative samples
+        // Only sample identical evidence. A rare event or a different account, address,
+        // message or event field must not disappear because its severity is informational.
         return events
-            .GroupBy(e => $"{e.EventId}|{e.Source}")
-            .SelectMany(g => g.Take(3)) // Max 3 per cluster
-            .ToList();
+            .GroupBy(evt => (evt.EventId, evt.LogName, evt.Source, evt.UserName,
+                evt.IpAddress, evt.Description, evt.AdditionalData))
+            .SelectMany(group => group.OrderByDescending(evt => evt.Timestamp).Take(samplesPerPattern));
     }
 
-    private List<SecurityEvent> FilterUniquePatterns(List<SecurityEvent> events)
+    private string CalculateBatchCacheKey(
+        IReadOnlyList<SecurityEvent> events,
+        string systemPrompt,
+        AiTargetSettings target)
     {
-        var seen = new HashSet<string>();
-        var unique = new List<SecurityEvent>();
-
-        foreach (var evt in events)
+        // Cached findings contain exact timestamps, records and evidence, so key the
+        // entire ordered batch rather than a sample of each event's description.
+        byte[] signature = JsonSerializer.SerializeToUtf8Bytes(new
         {
-            string pattern = $"{evt.EventId}|{evt.Source}|{evt.UserName}";
-            if (seen.Add(pattern))
-            {
-                unique.Add(evt);
-            }
+            systemPrompt,
+            target.BaseUrl,
+            target.Model,
+            target.Mode,
+            target.Effort,
+            events
+        });
+
+        return Convert.ToBase64String(SHA256.HashData(signature));
+    }
+
+    private IReadOnlyList<AiTargetSettings> GetAnalysisRoutes()
+    {
+        var configured = _settingsService.Current.AiTargets ?? new List<AiTargetSettings>();
+        var main = configured.FirstOrDefault(target =>
+            string.Equals(target.Name, AiTargetSettings.MainName, StringComparison.OrdinalIgnoreCase))
+            ?? configured.FirstOrDefault();
+        if (main == null)
+        {
+            return Array.Empty<AiTargetSettings>();
         }
 
-        return unique;
+        var routes = new List<AiTargetSettings> { main };
+        var fallback = configured.FirstOrDefault(target =>
+            !ReferenceEquals(target, main)
+            && string.Equals(target.Name, AiTargetSettings.FallbackName, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(target.BaseUrl));
+        if (fallback != null)
+        {
+            routes.Add(fallback);
+        }
+
+        return routes;
     }
 
-    private string CalculateEventFingerprint(SecurityEvent evt)
+    private static AiTargetSettings GetCurrentRoute(
+        IReadOnlyList<AiTargetSettings> routes,
+        AnalysisRouteState routeState)
     {
-        // Create signature from key attributes
-        var signatureData = $"{evt.EventId}|{evt.Source}|{evt.Severity}|" +
-                           $"{CompactText(evt.Description ?? "")[..Math.Min(200, (evt.Description?.Length ?? 0))]}";
+        if (routes.Count == 0)
+        {
+            throw new InvalidOperationException(AppText.Get("Configure the Main AI route before running an audit."));
+        }
 
-        using var sha256 = SHA256.Create();
-        var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(signatureData));
-        return Convert.ToBase64String(hash);
+        return routeState.UseFallback && routes.Count > 1 ? routes[1] : routes[0];
     }
+
+    private static string GetCurrentRouteName(
+        IReadOnlyList<AiTargetSettings> routes,
+        AnalysisRouteState routeState) => GetCurrentRoute(routes, routeState).Name;
+
+    private void SwitchToFallback(
+        IReadOnlyList<AiTargetSettings> routes,
+        AnalysisRouteState routeState,
+        string failedRoute,
+        string reason)
+    {
+        if (routes.Count < 2)
+        {
+            return;
+        }
+
+        routeState.EnableFallback();
+        _diagnosticLogService.Write(
+            $"AI route failover: from={failedRoute}, to={routes[1].Name}, reason={reason}");
+    }
+
+    private static bool ShouldFailover(int statusCode) => statusCode >= 500 || statusCode == 408 || statusCode == 429;
+
+    private static bool IsFailoverException(Exception exception) => exception is
+        HttpRequestException or IOException or TimeoutException or TaskCanceledException or OperationCanceledException or InvalidOperationException;
 
     private async Task<List<AuditIssue>> AnalyzeEventsParallelAsync(
         List<SecurityEvent> events,
-        AiTargetSettings target,
+        IReadOnlyList<AiTargetSettings> routes,
         string systemPrompt,
         int inputTokenBudget,
         int batchSize,
         int maxParallel,
-        IProgress<string>? progress,
+        AnalysisRouteState routeState,
+        IProgress<AuditProgressEventArgs>? progress,
         CancellationToken cancellationToken)
     {
         var batches = new List<List<SecurityEvent>>();
@@ -1094,19 +1273,24 @@ public sealed class AiAnalysisService
 
         var allIssues = new ConcurrentBag<AuditIssue>();
         int completedBatches = 0;
-        var semaphore = new SemaphoreSlim(maxParallel);
+        using var semaphore = new SemaphoreSlim(maxParallel);
 
         var tasks = batches.Select(async (batch, index) =>
         {
             await semaphore.WaitAsync(cancellationToken);
             try
             {
-                var issues = await AnalyzeBatchWithCacheAsync(
-                    target,
+                var localIssues = await AnalyzeBatchWithCacheAsync(
+                    routes,
                     batch,
                     systemPrompt,
                     inputTokenBudget,
+                    routeState,
+                    progress,
                     cancellationToken);
+                var issues = RemapIssuesToIndexes(
+                    localIssues,
+                    Enumerable.Range(index * batchSize, batch.Count).ToArray());
 
                 foreach (var issue in issues)
                 {
@@ -1114,7 +1298,8 @@ public sealed class AiAnalysisService
                 }
 
                 int completed = Interlocked.Increment(ref completedBatches);
-                progress?.Report($"Analyzing ({completed}/{batches.Count})... {allIssues.Count} issues found");
+                progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Analyzing ({0}/{1})... {2} issues found", completed, batches.Count, allIssues.Count)
+                { CompletedBatches = completed, TotalBatches = batches.Count });
             }
             finally
             {
@@ -1127,61 +1312,48 @@ public sealed class AiAnalysisService
     }
 
     private async Task<List<AuditIssue>> AnalyzeBatchWithCacheAsync(
-        AiTargetSettings target,
+        IReadOnlyList<AiTargetSettings> routes,
         List<SecurityEvent> events,
         string systemPrompt,
         int inputTokenBudget,
+        AnalysisRouteState routeState,
+        IProgress<AuditProgressEventArgs>? progress,
         CancellationToken cancellationToken)
     {
         if (!_settingsService.Current.EnableCaching)
         {
-            return await AnalyzeBatchAsync(target, events, systemPrompt, inputTokenBudget, cancellationToken);
+            return await AnalyzeBatchAsync(routes, events, systemPrompt, inputTokenBudget, routeState, progress, cancellationToken);
         }
 
-        // Check cache for individual events
-        var uncachedEvents = new List<SecurityEvent>();
-        var cachedIssues = new List<AuditIssue>();
+        var currentTarget = GetCurrentRoute(routes, routeState);
+        string cacheKey = CalculateBatchCacheKey(events, systemPrompt, currentTarget);
 
-        foreach (var evt in events)
+        if (_analysisCache.TryGet(cacheKey, out var cached))
         {
-            string fingerprint = CalculateEventFingerprint(evt);
-            if (_analysisCache.TryGet(fingerprint, out var issues))
-            {
-                cachedIssues.AddRange(issues);
-            }
-            else
-            {
-                uncachedEvents.Add(evt);
-            }
+            _diagnosticLogService.Write($"Cache hit: batch events={events.Count}, issues={cached.Issues.Count}");
+            return cached.Issues.Select(CloneIssue).ToList();
         }
 
-        if (uncachedEvents.Count == 0)
-        {
-            _diagnosticLogService.Write($"Cache hit: all {events.Count} events cached");
-            return cachedIssues;
-        }
-
-        _diagnosticLogService.Write($"Cache: {cachedIssues.Count} hits, {uncachedEvents.Count} misses");
-
-        // Analyze uncached events
-        var newIssues = await AnalyzeBatchAsync(
-            target,
-            uncachedEvents,
+        var issues = await AnalyzeBatchAsync(
+            routes,
+            events,
             systemPrompt,
             inputTokenBudget,
+            routeState,
+            progress,
             cancellationToken);
 
-        // Update cache (group issues by event)
-        foreach (var evt in uncachedEvents)
+        // Cache only primary-route results. A fallback response must not be silently reused
+        // when the primary endpoint becomes healthy again.
+        if (!routeState.UseFallback)
         {
-            string fingerprint = CalculateEventFingerprint(evt);
-            var eventIssues = newIssues.Where(i =>
-                i.Description?.Contains(evt.EventId.ToString()) ?? false).ToList();
-            _analysisCache.Set(fingerprint, eventIssues);
+            _analysisCache.Set(cacheKey, new CachedBatchAnalysis
+            {
+                Issues = issues.Select(CloneIssue).ToList()
+            });
         }
 
-        cachedIssues.AddRange(newIssues);
-        return cachedIssues;
+        return issues;
     }
 
     public void ClearCache()
@@ -1189,6 +1361,70 @@ public sealed class AiAnalysisService
         _analysisCache.Clear();
         _diagnosticLogService.Write("Analysis cache cleared");
     }
+
+    private static List<AuditIssue> RemapIssuesToIndexes(
+        IEnumerable<AuditIssue> issues,
+        IReadOnlyList<int> originalIndexes)
+    {
+        return issues.Select(issue =>
+        {
+            var copy = CloneIssue(issue);
+            copy.EventRef = RemapLocalEventRef(copy.EventRef, originalIndexes);
+            copy.RelatedEventRefs = copy.RelatedEventRefs
+                .Select(reference => RemapLocalEventRef(reference, originalIndexes))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return copy;
+        }).ToList();
+    }
+
+    private static string RemapLocalEventRef(
+        string reference,
+        IReadOnlyList<int> originalIndexes)
+    {
+        if (!reference.StartsWith("event-", StringComparison.OrdinalIgnoreCase)
+            || !int.TryParse(reference[6..], out int localIndex)
+            || localIndex < 0
+            || localIndex >= originalIndexes.Count)
+        {
+            return reference;
+        }
+
+        return $"event-{originalIndexes[localIndex]}";
+    }
+
+    private static AuditIssue CloneIssue(AuditIssue issue) => new()
+    {
+        Key = issue.Key,
+        EventRef = issue.EventRef,
+        EventId = issue.EventId,
+        EventTimestamp = issue.EventTimestamp,
+        Source = issue.Source,
+        LogName = issue.LogName,
+        EventRecordId = issue.EventRecordId,
+        EventDescription = issue.EventDescription,
+        EventAdditionalData = issue.EventAdditionalData,
+        UserName = issue.UserName,
+        IpAddress = issue.IpAddress,
+        FirstSeenUtc = issue.FirstSeenUtc,
+        LastSeenUtc = issue.LastSeenUtc,
+        SupportingEventCount = issue.SupportingEventCount,
+        Title = issue.Title,
+        Description = issue.Description,
+        Severity = issue.Severity,
+        Confidence = issue.Confidence,
+        Category = issue.Category,
+        Affected = issue.Affected,
+        RootCause = issue.RootCause,
+        Recommendation = issue.Recommendation,
+        TitleZh = issue.TitleZh,
+        DescriptionZh = issue.DescriptionZh,
+        RootCauseZh = issue.RootCauseZh,
+        RecommendationZh = issue.RecommendationZh,
+        Occurrences = issue.Occurrences,
+        RelatedEventRefs = issue.RelatedEventRefs.ToList(),
+        DetectedAt = issue.DetectedAt
+    };
 
 
     private static string FormatException(Exception exception)
@@ -1205,18 +1441,28 @@ public sealed class AiAnalysisService
         return string.Join(" Inner: ", messages);
     }
 
-    private sealed class IssuesResponse
-    {
-        public List<AuditIssue> Issues { get; set; } = new();
-    }
-
     private sealed record AnalysisResponsePayload(
         string Text,
         bool IsStreaming,
         int StreamEventCount,
         int StatusCode,
-        string? ReasonPhrase)
+        string? ReasonPhrase,
+        string Mode)
     {
         public bool IsSuccessStatusCode => StatusCode is >= 200 and <= 299;
+    }
+
+    private sealed class AnalysisRouteState
+    {
+        private int _useFallback;
+
+        public bool UseFallback => Volatile.Read(ref _useFallback) == 1;
+
+        public void EnableFallback() => Interlocked.Exchange(ref _useFallback, 1);
+    }
+
+    private sealed class CachedBatchAnalysis
+    {
+        public List<AuditIssue> Issues { get; init; } = new();
     }
 }

@@ -3,27 +3,29 @@ using System.ComponentModel;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Shapes;
-using LocalSecurityAudit.ViewModels;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using LocalSecurityAudit.Models;
-using Windows.Foundation;
+using LocalSecurityAudit.Helpers;
+using LocalSecurityAudit.Services;
+using LocalSecurityAudit.ViewModels;
 
 namespace LocalSecurityAudit.Views;
 
 public sealed partial class DashboardPage : Page
 {
+    private bool _isFindingDialogOpen;
+
     public DashboardViewModel ViewModel { get; }
 
     public DashboardPage()
     {
-        // Get ViewModel from DI
         ViewModel = App.Current.Services.GetService<DashboardViewModel>()
             ?? throw new InvalidOperationException("DashboardViewModel not registered");
 
         InitializeComponent();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        ActualThemeChanged += OnActualThemeChanged;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -39,78 +41,87 @@ public sealed partial class DashboardPage : Page
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
     }
 
+    private void OnActualThemeChanged(FrameworkElement sender, object args)
+    {
+        ApplyHealthPresentation();
+    }
+
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(DashboardViewModel.HealthScore)
-            or nameof(DashboardViewModel.HasAuditData))
+            or nameof(DashboardViewModel.HasAuditData)
+            or nameof(DashboardViewModel.HealthBand))
         {
             ApplyHealthPresentation();
         }
     }
 
+    /// <summary>
+    /// The meter is two star-sized columns: the fill takes <c>score</c> parts and the rest
+    /// <c>100 - score</c>, so it needs no measuring code and resizes with the card.
+    /// </summary>
     private void ApplyHealthPresentation()
     {
         bool hasAuditData = ViewModel.HasAuditData;
         int score = Math.Clamp(ViewModel.HealthScore, 0, 100);
-        HealthRing.Data = hasAuditData && score > 0
-            ? CreateHealthGeometry(score)
-            : null;
-        HealthRing.Visibility = hasAuditData && score > 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
 
-        string resourceKey = !hasAuditData
-            ? "ControlStrongStrokeColorDefaultBrush"
-            : score >= 80
-                ? "SystemFillColorSuccessBrush"
-                : score >= 50
-                    ? "SystemFillColorCautionBrush"
-                    : "SystemFillColorCriticalBrush";
-        if (Application.Current.Resources[resourceKey] is Brush brush)
+        HealthMeterFillColumn.Width = new GridLength(hasAuditData ? score : 0, GridUnitType.Star);
+        HealthMeterRestColumn.Width = new GridLength(hasAuditData ? 100 - score : 100, GridUnitType.Star);
+        HealthMeterFill.Visibility = hasAuditData && score > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        string brushKey = !hasAuditData
+            ? "TextFillColorTertiaryBrush"
+            : ViewModel.HealthBand switch
+            {
+                HealthBand.Good => "HealthGoodBrush",
+                HealthBand.Warning => "HealthWarningBrush",
+                _ => "HealthRiskBrush"
+            };
+
+        var brush = ThemeResources.GetBrush(this, brushKey);
+        if (brush != null)
         {
-            HealthRing.Stroke = brush;
-            HealthScoreText.Foreground = brush;
+            HealthDot.Fill = brush;
+            HealthMeterFill.Background = brush;
         }
     }
 
-    private static Geometry CreateHealthGeometry(int score)
+    private void OnFilterClick(object sender, RoutedEventArgs e)
     {
-        const double size = 132;
-        const double center = size / 2;
-        const double radius = 62;
-
-        if (score >= 100)
+        if (sender is ToggleButton button && button.Tag is string filter)
         {
-            return new EllipseGeometry
-            {
-                Center = new Point(center, center),
-                RadiusX = radius,
-                RadiusY = radius
-            };
+            ViewModel.SetSeverityFilterCommand.Execute(filter);
+            button.IsChecked = true;
+        }
+    }
+
+    private async void OnFindingClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button
+            || button.Tag is not AuditIssueEnhanced issue
+            || XamlRoot == null
+            || _isFindingDialogOpen)
+        {
+            return;
         }
 
-        double angle = score / 100d * Math.PI * 2d;
-        var start = new Point(center, center - radius);
-        var end = new Point(
-            center + Math.Sin(angle) * radius,
-            center - Math.Cos(angle) * radius);
-        var figure = new PathFigure
+        _isFindingDialogOpen = true;
+        try
         {
-            StartPoint = start,
-            IsClosed = false,
-            IsFilled = false
-        };
-        figure.Segments.Add(new ArcSegment
+            var dialog = new FindingDetailsDialog(issue, XamlRoot, ActualTheme);
+            await dialog.ShowAsync();
+        }
+        catch (Exception ex)
         {
-            Point = end,
-            Size = new Size(radius, radius),
-            IsLargeArc = score > 50,
-            SweepDirection = SweepDirection.Clockwise
-        });
-
-        var geometry = new PathGeometry();
-        geometry.Figures.Add(figure);
-        return geometry;
+            App.GetService<DiagnosticLogService>().WriteException("Finding details could not be opened", ex);
+            ViewModel.StatusSeverity = InfoBarSeverity.Error;
+            ViewModel.StatusMessage = AppText.Get("Finding details could not be opened. Check the diagnostic log.");
+            ViewModel.IsStatusVisible = true;
+        }
+        finally
+        {
+            _isFindingDialogOpen = false;
+        }
     }
 
     private void OnStatusBarClosed(InfoBar sender, object args)

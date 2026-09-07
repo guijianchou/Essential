@@ -1,48 +1,169 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
-using LiveChartsCore;
-using LiveChartsCore.SkiaSharpView;
-using LiveChartsCore.SkiaSharpView.Painting;
-using SkiaSharp;
+using Microsoft.UI.Xaml.Controls;
 using LocalSecurityAudit.Models;
 using LocalSecurityAudit.Services;
 
 namespace LocalSecurityAudit.ViewModels;
 
+/// <summary>One dashboard category section: its findings plus the counts shown in the header.</summary>
+public sealed partial class FindingSection : ObservableObject
+{
+    private const double BarWidth = 96;
+    private const double MinSegmentWidth = 6;
+
+    [ObservableProperty]
+    private bool isExpanded;
+
+    public FindingSection(string name, IReadOnlyList<AuditIssueEnhanced> issues, bool isExpanded)
+    {
+        Name = name;
+        Issues = new ObservableCollection<AuditIssueEnhanced>(issues);
+        HighCount = issues.Count(issue => issue.IsHigh);
+        MediumCount = issues.Count(issue => issue.IsMedium);
+        LowCount = issues.Count - HighCount - MediumCount;
+        this.isExpanded = isExpanded;
+
+        int total = Math.Max(1, issues.Count);
+        HighBarWidth = SegmentWidth(HighCount, total);
+        MediumBarWidth = SegmentWidth(MediumCount, total);
+        LowBarWidth = SegmentWidth(LowCount, total);
+
+        var parts = new List<string>();
+        if (HighCount > 0) parts.Add(AppText.Format("{0} high", HighCount));
+        if (MediumCount > 0) parts.Add(AppText.Format("{0} medium", MediumCount));
+        if (LowCount > 0) parts.Add(AppText.Format("{0} low", LowCount));
+        SeveritySummary = string.Join(", ", parts);
+    }
+
+    public string Name { get; }
+    public ObservableCollection<AuditIssueEnhanced> Issues { get; }
+    public int Count => Issues.Count;
+    public int HighCount { get; }
+    public int MediumCount { get; }
+    public int LowCount { get; }
+    public bool HasHigh => HighCount > 0;
+    public bool HasMedium => MediumCount > 0;
+    public bool HasLow => LowCount > 0;
+    public double HighBarWidth { get; }
+    public double MediumBarWidth { get; }
+    public double LowBarWidth { get; }
+    public string SeveritySummary { get; }
+    public string CountLabel => Count == 1 ? AppText.Get("1 finding") : AppText.Format("{0} findings", Count);
+
+    private static double SegmentWidth(int count, int total)
+    {
+        if (count == 0)
+        {
+            return 0;
+        }
+
+        return Math.Max(MinSegmentWidth, Math.Round(BarWidth * count / total));
+    }
+}
+
 public partial class DashboardViewModel : ObservableObject, IDisposable
 {
+    public const string FilterAll = "All";
+    public const string FilterHigh = "High";
+    public const string FilterMedium = "Medium";
+    public const string FilterLow = "Low";
+
     private readonly DataStorageService _storageService;
     private readonly AuditSchedulerService _schedulerService;
     private readonly DispatcherQueue? _dispatcherQueue;
+    private readonly List<AuditIssueEnhanced> _allIssues = new();
     private bool _isRunningScan;
+    private AuditResult? _displayedResult;
 
     [ObservableProperty]
-    private int healthScore = 100;
+    private List<AuditIssueEnhanced> priorityFindings = new();
 
     [ObservableProperty]
-    private string healthScoreText = "—";
+    private int eventCount;
+
+    [ObservableProperty]
+    private string coverageState = AppText.Get("No audit");
+
+    [ObservableProperty]
+    private string coverageText = AppText.Get("Run a scan to establish the evidence coverage.");
 
     [ObservableProperty]
     private bool hasAuditData;
 
     [ObservableProperty]
+    private int healthScore;
+
+    [ObservableProperty]
+    private HealthBand healthBand = HealthBand.Good;
+
+    [ObservableProperty]
+    private string healthScoreText = "–";
+
+    [ObservableProperty]
+    private string healthVerdict = AppText.Get("No audit yet");
+
+    [ObservableProperty]
+    private string healthSummaryText = AppText.Get("Run a scan to see your posture.");
+
+    [ObservableProperty]
+    private string healthDeductionText = string.Empty;
+
+    [ObservableProperty]
+    private string lastAuditHeadline = AppText.Get("No audit has completed yet");
+
+    [ObservableProperty]
+    private string scanTypeText = "–";
+
+    [ObservableProperty]
+    private string finishedText = "–";
+
+    [ObservableProperty]
+    private string windowText = "–";
+
+    [ObservableProperty]
+    private string eventCountText = "–";
+
+    [ObservableProperty]
+    private string scanCountText = "0";
+
+    [ObservableProperty]
+    private int totalFindings;
+
+    [ObservableProperty]
+    private int highCount;
+
+    [ObservableProperty]
+    private int mediumCount;
+
+    [ObservableProperty]
+    private int lowCount;
+
+    [ObservableProperty]
+    private string findingsSummaryText = AppText.Get("No findings");
+
+    [ObservableProperty]
+    private string severityFilter = FilterAll;
+
+    [ObservableProperty]
+    private ObservableCollection<FindingSection> findingSections = new();
+
+    [ObservableProperty]
     private bool showEmptyIssues;
 
     [ObservableProperty]
-    private ObservableCollection<AuditIssue> issues = new();
+    private bool showNoAudit = true;
 
     [ObservableProperty]
-    private ObservableCollection<IssueGroup> issueGroups = new();
-
-    [ObservableProperty]
-    private ISeries[] severityPieSeries = Array.Empty<ISeries>();
+    private bool showNoFilterMatches;
 
     [ObservableProperty]
     private bool isLoading;
@@ -51,34 +172,15 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private bool isStatusVisible;
 
     [ObservableProperty]
-    private string statusMessage = "Ready";
+    private string statusMessage = AppText.Get("Ready");
 
     [ObservableProperty]
-    private Microsoft.UI.Xaml.Controls.InfoBarSeverity statusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Informational;
+    private InfoBarSeverity statusSeverity = InfoBarSeverity.Informational;
 
-    [ObservableProperty]
-    private string lastUpdatedText = "No audit has completed";
-
-    [ObservableProperty]
-    private int highIssueCount;
-
-    [ObservableProperty]
-    private int mediumIssueCount;
-
-    [ObservableProperty]
-    private int lowIssueCount;
-
-    [ObservableProperty]
-    private int scanCount;
-
-    [ObservableProperty]
-    private int eventCount;
-
-    [ObservableProperty]
-    private string scanTypeText = "—";
-
-    [ObservableProperty]
-    private string timeRangeText = "—";
+    public bool IsFilterAll => SeverityFilter == FilterAll;
+    public bool IsFilterHigh => SeverityFilter == FilterHigh;
+    public bool IsFilterMedium => SeverityFilter == FilterMedium;
+    public bool IsFilterLow => SeverityFilter == FilterLow;
 
     public DashboardViewModel(
         DataStorageService storageService,
@@ -90,32 +192,44 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         _schedulerService.AuditCompleted += OnAuditCompleted;
         _schedulerService.AuditFailed += OnAuditFailed;
         _schedulerService.AuditProgress += OnAuditProgress;
+        _schedulerService.HistoryUpdated += OnHistoryUpdated;
+        AppText.Current.LanguageChanged += OnLanguageChanged;
+    }
+
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        EnqueueOnUi(() =>
+        {
+            if (_displayedResult != null) ApplyResult(_displayedResult);
+            else ApplyNoData();
+        });
     }
 
     private void OnAuditCompleted(object? sender, AuditCompletedEventArgs e)
     {
         EnqueueOnUi(async () =>
         {
+            ApplyResult(e.Result);
             try
             {
                 await LoadDataCommand.ExecuteAsync(null);
             }
             catch (Exception ex)
             {
-                StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
-                StatusMessage = $"Failed to load audit results: {ex.Message}";
-                IsStatusVisible = true;
+                ShowStatus(InfoBarSeverity.Error, AppText.Format("Failed to load audit results: {0}", ex.Message));
             }
         });
+    }
+
+    private void OnHistoryUpdated(object? sender, EventArgs e)
+    {
+        EnqueueOnUi(() => _ = LoadDataCommand.ExecuteAsync(null));
     }
 
     private void OnAuditFailed(object? sender, AuditFailedEventArgs e)
     {
         EnqueueOnUi(() =>
         {
-            StatusMessage = $"Audit failed: {e.Message}";
-            StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
-            IsStatusVisible = true;
             IsLoading = false;
         });
     }
@@ -124,15 +238,25 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     {
         EnqueueOnUi(() =>
         {
-            if (!_isRunningScan)
-            {
-                return;
-            }
-
-            StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Informational;
-            StatusMessage = e.Message;
-            IsStatusVisible = true;
+            IsLoading = _isRunningScan || _schedulerService.IsScanning;
         });
+    }
+
+    [RelayCommand]
+    private void SetSeverityFilter(string? filter)
+    {
+        string next = filter switch
+        {
+            FilterHigh or FilterMedium or FilterLow => filter,
+            _ => FilterAll
+        };
+
+        SeverityFilter = next;
+        OnPropertyChanged(nameof(IsFilterAll));
+        OnPropertyChanged(nameof(IsFilterHigh));
+        OnPropertyChanged(nameof(IsFilterMedium));
+        OnPropertyChanged(nameof(IsFilterLow));
+        RebuildSections();
     }
 
     [RelayCommand]
@@ -150,92 +274,37 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         }
 
         IsLoading = true;
-        IsStatusVisible = true;
         if (!_isRunningScan)
         {
-            StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Informational;
-            StatusMessage = "Loading latest audit...";
+            ShowStatus(InfoBarSeverity.Informational, AppText.Get("Loading the latest audit..."));
         }
 
         try
         {
-            var result = await _storageService.GetTodayResultAsync();
-            ScanCount = await _storageService.GetAuditRecordCountAsync();
+            var result = await _storageService.GetLatestResultAsync();
+            int scanCount = await _storageService.GetAuditRecordCountAsync();
+            ScanCountText = scanCount.ToString("N0", AppText.Culture);
 
             if (result == null)
             {
-                HasAuditData = false;
-                ShowEmptyIssues = false;
-                HealthScoreText = "—";
-                HealthScore = 100;
-                Issues.Clear();
-                IssueGroups.Clear();
-                HighIssueCount = 0;
-                MediumIssueCount = 0;
-                LowIssueCount = 0;
-                EventCount = 0;
-                ScanTypeText = "—";
-                TimeRangeText = "—";
-                LastUpdatedText = "No audit has completed";
-                UpdateCharts();
+                ApplyNoData();
                 if (!_isRunningScan)
                 {
-                    StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Informational;
-                    StatusMessage = "No audit data for today";
-                    IsStatusVisible = true;
+                    IsStatusVisible = false;
                 }
 
                 return;
             }
 
-            HealthScore = result.HealthScore;
-            HealthScoreText = result.HealthScore.ToString();
-            HasAuditData = true;
-            Issues.Clear();
-            var categorizedIssues = new List<AuditIssueEnhanced>();
-            var counts = new int[3]; // High, Medium, Low
-            foreach (var issue in result.Findings)
+            ApplyResult(result);
+            if (!_isRunningScan)
             {
-                if (issue.DetectedAt == default)
-                {
-                    issue.DetectedAt = result.Timestamp;
-                }
-
-                Issues.Add(issue);
-                categorizedIssues.Add(IssueCategorizer.CategorizeIssue(issue));
-                switch (issue.Severity)
-                {
-                    case "High":
-                        counts[0]++;
-                        break;
-                    case "Medium":
-                        counts[1]++;
-                        break;
-                    case "Low":
-                        counts[2]++;
-                        break;
-                }
+                IsStatusVisible = false;
             }
-
-            HighIssueCount = counts[0];
-            MediumIssueCount = counts[1];
-            LowIssueCount = counts[2];
-            ShowEmptyIssues = Issues.Count == 0;
-            UpdateIssueGroups(categorizedIssues);
-            EventCount = ReadMetadataInt(result, "EventCount");
-            ScanTypeText = ReadMetadataString(result, "ScanType");
-            TimeRangeText = ReadMetadataString(result, "TimeRange");
-            LastUpdatedText = $"Updated {result.Timestamp.ToLocalTime():yyyy-MM-dd HH:mm:ss}";
-            UpdateCharts();
-            StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Success;
-            StatusMessage = LastUpdatedText;
-            IsStatusVisible = true;
         }
         catch (Exception ex)
         {
-            StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
-            StatusMessage = $"Load failed: {ex.Message}";
-            IsStatusVisible = true;
+            ShowStatus(InfoBarSeverity.Error, AppText.Format("Load failed: {0}", ex.Message));
         }
         finally
         {
@@ -260,30 +329,21 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
 
     private async Task RunScanAsync(bool fastScan)
     {
-        if (_isRunningScan || IsLoading)
+        if (_isRunningScan || IsLoading || _schedulerService.IsScanning)
         {
             return;
         }
 
         _isRunningScan = true;
         IsLoading = true;
-        IsStatusVisible = true;
-        StatusMessage = fastScan
-            ? "Running fast scan..."
-            : "Running full scan...";
-        StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Informational;
+        IsStatusVisible = false;
 
         try
         {
             bool succeeded = await _schedulerService.ExecuteAuditAsync(fastScan);
-            if (!succeeded)
+            if (succeeded)
             {
-                if (StatusSeverity != Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error)
-                {
-                    StatusSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
-                    StatusMessage = fastScan ? "Fast scan failed" : "Full scan failed";
-                    IsStatusVisible = true;
-                }
+                await LoadDataCommand.ExecuteAsync(null);
             }
         }
         finally
@@ -293,126 +353,266 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void UpdateCharts()
+    private void ApplyNoData()
     {
-        SeverityPieSeries = new ISeries[]
-        {
-            new PieSeries<int>
-            {
-                Name = "High",
-                Values = new[] { HighIssueCount },
-                Fill = new SolidColorPaint(SKColors.IndianRed)
-            },
-            new PieSeries<int>
-            {
-                Name = "Medium",
-                Values = new[] { MediumIssueCount },
-                Fill = new SolidColorPaint(SKColors.Orange)
-            },
-            new PieSeries<int>
-            {
-                Name = "Low",
-                Values = new[] { LowIssueCount },
-                Fill = new SolidColorPaint(SKColors.Gold)
-            }
-        };
+        _displayedResult = null;
+        HasAuditData = false;
+        _allIssues.Clear();
+        HealthScore = 0;
+        HealthBand = HealthBand.Good;
+        HealthScoreText = "–";
+        HealthVerdict = AppText.Get("No audit yet");
+        HealthSummaryText = AppText.Get("Run a fast scan for the past few hours or a full scan for the past 24 hours.");
+        HealthDeductionText = string.Empty;
+        LastAuditHeadline = AppText.Get("No audit has completed yet");
+        ScanTypeText = "–";
+        FinishedText = "–";
+        WindowText = "–";
+        EventCountText = "–";
+        EventCount = 0;
+        CoverageState = AppText.Get("No audit");
+        CoverageText = AppText.Get("Run a scan to establish the evidence coverage.");
+        PriorityFindings = new List<AuditIssueEnhanced>();
+        TotalFindings = 0;
+        HighCount = 0;
+        MediumCount = 0;
+        LowCount = 0;
+        FindingsSummaryText = AppText.Get("No findings yet");
+        ShowNoAudit = true;
+        ShowEmptyIssues = false;
+        ShowNoFilterMatches = false;
+        FindingSections.Clear();
     }
 
-    private void UpdateIssueGroups(IEnumerable<AuditIssueEnhanced> categorizedIssues)
+    private void ApplyResult(AuditResult result)
     {
-        var groups = categorizedIssues
-            .GroupBy(issue => issue.CategoryGroup)
-            .Select(CreateIssueGroup)
-            .OrderBy(group => GetIssueGroupOrder(group.GroupName))
-            .ThenByDescending(group => group.CriticalCount)
-            .ThenByDescending(group => group.HighCount)
+        _displayedResult = result;
+        HasAuditData = true;
+        ShowNoAudit = false;
+
+        _allIssues.Clear();
+        foreach (var issue in result.Findings)
+        {
+            if (issue.DetectedAt == default)
+            {
+                issue.DetectedAt = result.Timestamp;
+            }
+
+            _allIssues.Add(IssueCategorizer.CategorizeIssue(issue));
+        }
+
+        var breakdown = HealthScoreCalculator.Calculate(result.Findings);
+        HealthScore = breakdown.Score;
+        HealthBand = breakdown.Band;
+        HealthScoreText = breakdown.Score.ToString(AppText.Culture);
+        HealthVerdict = breakdown.Verdict;
+        HealthSummaryText = breakdown.TotalFindings == 0
+            ? AppText.Get("No findings in the latest audit")
+            : AppText.Format("Based on {0} high, {1} medium and {2} low findings.", breakdown.HighCount, breakdown.MediumCount, breakdown.LowCount);
+        HealthDeductionText = BuildDeductionText(breakdown);
+
+        TotalFindings = breakdown.TotalFindings;
+        HighCount = breakdown.HighCount;
+        MediumCount = breakdown.MediumCount;
+        LowCount = breakdown.LowCount;
+
+        ScanTypeText = ReadMetadataString(result, "ScanType").ToLowerInvariant() switch
+        {
+            "fast scan" => AppText.Get("Fast scan"),
+            "full scan" => AppText.Get("Full scan"),
+            "" => AppText.Get("Scan"),
+            var other => char.ToUpper(other[0], AppText.Culture) + other[1..]
+        };
+        FinishedText = FormatDay(result.Timestamp, capitalize: true);
+        LastAuditHeadline = AppText.Format("{0} finished {1}", ScanTypeText, FormatDay(result.Timestamp, capitalize: false));
+        WindowText = FormatWindow(result);
+        int eventCount = ReadMetadataInt(result, "EventCount");
+        EventCount = eventCount;
+        EventCountText = eventCount.ToString("N0", AppText.Culture);
+        CoverageState = eventCount == 0
+            ? AppText.Get("No events read")
+            : _allIssues.Count == 0 ? AppText.Get("Scanned · no findings") : AppText.Get("Evidence available");
+        CoverageText = eventCount == 0
+            ? AppText.Get("0 events were read in this window. No conclusion about system safety can be drawn.")
+            : result.Metadata?.ContainsKey("AnalyzedEventCount") == true
+                ? AppText.Format("{0:N0} events collected; {1:N0} analyzed by AI; {2:N0} excluded by filtering or sampling.",
+                    eventCount, ReadMetadataInt(result, "AnalyzedEventCount"), ReadMetadataInt(result, "FilteredEventCount"))
+                : AppText.Format("{0:N0} events collected. This older audit did not record how many were analyzed by AI.", eventCount);
+
+        RebuildSections();
+    }
+
+    private void RebuildSections()
+    {
+        var previousState = FindingSections.ToDictionary(section => section.Name, section => section.IsExpanded);
+
+        var visibleIssues = SeverityFilter switch
+        {
+            FilterHigh => _allIssues.Where(issue => issue.IsHigh).ToList(),
+            FilterMedium => _allIssues.Where(issue => issue.IsMedium).ToList(),
+            FilterLow => _allIssues.Where(issue => issue.IsLow).ToList(),
+            _ => _allIssues.ToList()
+        };
+
+        var groups = visibleIssues
+            .GroupBy(issue => issue.CategoryLabel)
+            .OrderByDescending(group => group.Max(issue => SeverityRank(issue.Severity)))
+            .ThenByDescending(group => group.Max(issue => issue.Occurrences))
+            .ThenBy(group => group.Min(issue => issue.CategoryOrder))
             .ToList();
 
-        IssueGroups.Clear();
-        foreach (var group in groups)
+        bool anyHigh = groups.Any(group => group.Any(issue => issue.IsHigh));
+        bool filterActive = SeverityFilter != FilterAll;
+        var sections = new List<FindingSection>();
+        for (int index = 0; index < groups.Count; index++)
         {
-            IssueGroups.Add(group);
+            var group = groups[index];
+            var issues = group
+                .OrderByDescending(issue => issue.IsHigh)
+                .ThenByDescending(issue => issue.IsMedium)
+                .ThenByDescending(issue => issue.EventTimestamp == default ? issue.DetectedAt : issue.EventTimestamp)
+                .ToList();
+
+            bool expanded = previousState.TryGetValue(group.Key, out bool wasExpanded)
+                ? wasExpanded
+                : filterActive || (anyHigh ? issues.Any(issue => issue.IsHigh) : index == 0);
+            sections.Add(new FindingSection(group.Key, issues, expanded));
+        }
+
+        FindingSections.Clear();
+        foreach (var section in sections)
+        {
+            FindingSections.Add(section);
+        }
+
+        int shown = sections.Sum(section => section.Count);
+        PriorityFindings = visibleIssues
+            .OrderByDescending(issue => SeverityRank(issue.Severity))
+            .ThenByDescending(issue => issue.Occurrences)
+            .ThenByDescending(issue => issue.EventTimestamp == default ? issue.DetectedAt : issue.EventTimestamp)
+            .Take(5)
+            .ToList();
+
+        ShowEmptyIssues = HasAuditData && _allIssues.Count == 0;
+        ShowNoFilterMatches = HasAuditData && _allIssues.Count > 0 && shown == 0;
+
+        if (!HasAuditData)
+        {
+            FindingsSummaryText = AppText.Get("No findings yet");
+        }
+        else if (_allIssues.Count == 0)
+        {
+            FindingsSummaryText = AppText.Get("No findings in the latest audit");
+        }
+        else if (filterActive)
+        {
+            string severityWord = AppText.Get(SeverityFilter.ToLowerInvariant());
+            FindingsSummaryText = shown == 0
+                ? AppText.Format("No {0} findings", severityWord)
+                : AppText.Format("{0} {1} findings in {2} categories", shown, severityWord, sections.Count);
+        }
+        else
+        {
+            FindingsSummaryText = AppText.Format("{0} findings in {1} categories", shown, sections.Count);
         }
     }
 
-    private static IssueGroup CreateIssueGroup(IGrouping<string, AuditIssueEnhanced> group)
+    private static int SeverityRank(IssueSeverity severity)
     {
-        var issues = group
-            .OrderByDescending(issue => issue.Severity)
-            .ThenByDescending(issue => issue.DetectedAt)
-            .ToList();
-
-        var sections = issues
-            .GroupBy(issue => issue.Category)
-            .Select(category => new IssueCategorySection
-            {
-                CategoryName = category.First().CategoryLabel,
-                CategoryIcon = category.First().CategoryIcon,
-                CategoryColor = category.First().CategoryColor,
-                TotalCount = category.Count(),
-                CriticalCount = category.Count(issue => issue.Severity == IssueSeverity.Critical),
-                HighCount = category.Count(issue => issue.Severity == IssueSeverity.High),
-                MediumCount = category.Count(issue => issue.Severity == IssueSeverity.Medium),
-                LowCount = category.Count(issue => issue.Severity == IssueSeverity.Low),
-                Issues = new ObservableCollection<AuditIssueEnhanced>(
-                    category.OrderByDescending(issue => issue.Severity)
-                        .ThenByDescending(issue => issue.DetectedAt))
-            })
-            .OrderByDescending(section => section.CriticalCount)
-            .ThenByDescending(section => section.HighCount)
-            .ThenByDescending(section => section.TotalCount)
-            .ThenBy(section => section.CategoryName)
-            .ToList();
-
-        return new IssueGroup
+        return severity switch
         {
-            GroupName = group.Key,
-            GroupIcon = GetGroupIcon(group.Key),
-            GroupColor = GetGroupColor(group.Key),
-            TotalCount = issues.Count,
-            CriticalCount = issues.Count(issue => issue.Severity == IssueSeverity.Critical),
-            HighCount = issues.Count(issue => issue.Severity == IssueSeverity.High),
-            MediumCount = issues.Count(issue => issue.Severity == IssueSeverity.Medium),
-            LowCount = issues.Count(issue => issue.Severity == IssueSeverity.Low),
-            Issues = new ObservableCollection<AuditIssueEnhanced>(issues),
-            CategorySections = new ObservableCollection<IssueCategorySection>(sections)
+            IssueSeverity.Critical => 4,
+            IssueSeverity.High => 3,
+            IssueSeverity.Medium => 2,
+            _ => 1
         };
     }
 
-    private static string GetGroupIcon(string groupName)
+    private static string BuildDeductionText(HealthScoreBreakdown breakdown)
     {
-        return groupName switch
-        {
-            "Security Issues" => "",
-            "System Issues" => "",
-            "Application Issues" => "",
-            "Network Issues" => "",
-            _ => ""
-        };
+        var parts = new List<string>();
+        if (breakdown.HighDeduction > 0) parts.Add(AppText.Format("high \u2212{0}", breakdown.HighDeduction));
+        if (breakdown.MediumDeduction > 0) parts.Add(AppText.Format("medium \u2212{0}", breakdown.MediumDeduction));
+        if (breakdown.LowDeduction > 0) parts.Add(AppText.Format("low \u2212{0}", breakdown.LowDeduction));
+        return parts.Count == 0
+            ? AppText.Get("No deductions. A score of 80 or more counts as healthy.")
+            : AppText.Format("Deductions from 100: {0}. 80 or more counts as healthy.", string.Join(", ", parts));
     }
 
-    private static string GetGroupColor(string groupName)
+    private static string FormatDay(DateTime utc, bool capitalize)
     {
-        return groupName switch
+        var local = utc.ToLocalTime();
+        var today = DateTime.Today;
+        string day = local.Date == today
+            ? AppText.Get("today")
+            : local.Date == today.AddDays(-1)
+                ? AppText.Get("yesterday")
+                : local.ToString("MMM d", AppText.Culture);
+
+        if (capitalize)
         {
-            "Security Issues" => "#DC2626",
-            "System Issues" => "#0EA5E9",
-            "Application Issues" => "#8B5CF6",
-            "Network Issues" => "#0EA5E9",
-            _ => "#6B7280"
-        };
+            day = char.ToUpper(day[0], AppText.Culture) + day[1..];
+            return $"{day}, {local:HH:mm}";
+        }
+
+        return AppText.Format("{0} at {1}", day, local.ToString("HH:mm", AppText.Culture));
     }
 
-    private static int GetIssueGroupOrder(string groupName)
+    private static string FormatWindow(AuditResult result)
     {
-        return groupName switch
+        string startText = ReadMetadataString(result, "ScanStart");
+        string endText = ReadMetadataString(result, "ScanEnd");
+        if (TryParseUtc(startText, "O", out var start) && TryParseUtc(endText, "O", out var end))
         {
-            "Security Issues" => 0,
-            "System Issues" => 1,
-            "Application Issues" => 2,
-            "Network Issues" => 3,
-            _ => 4
-        };
+            return FormatWindow(start, end);
+        }
+
+        // Older records only carry a "yyyy-MM-dd HH:mm - yyyy-MM-dd HH:mm" text whose time
+        // zone changed between builds. The window ends shortly before the result was saved,
+        // so pick the interpretation (local or UTC) whose end is closest to the timestamp.
+        string legacy = ReadMetadataString(result, "TimeRange");
+        var parts = legacy.Split(" - ", StringSplitOptions.TrimEntries);
+        if (parts.Length == 2
+            && DateTime.TryParseExact(parts[0], "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var rawStart)
+            && DateTime.TryParseExact(parts[1], "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var rawEnd))
+        {
+            var asUtcEnd = DateTime.SpecifyKind(rawEnd, DateTimeKind.Utc);
+            var asLocalEnd = DateTime.SpecifyKind(rawEnd, DateTimeKind.Local).ToUniversalTime();
+            var saved = result.Timestamp.ToUniversalTime();
+            double utcGap = Math.Abs((saved - asUtcEnd).TotalMinutes);
+            double localGap = Math.Abs((saved - asLocalEnd).TotalMinutes);
+            bool treatAsLocal = localGap < utcGap;
+            var legacyStart = treatAsLocal
+                ? DateTime.SpecifyKind(rawStart, DateTimeKind.Local).ToUniversalTime()
+                : DateTime.SpecifyKind(rawStart, DateTimeKind.Utc);
+            var legacyEnd = treatAsLocal ? asLocalEnd : asUtcEnd;
+            return FormatWindow(legacyStart, legacyEnd);
+        }
+
+        return string.IsNullOrEmpty(legacy) ? "–" : legacy;
+    }
+
+    private static string FormatWindow(DateTime startUtc, DateTime endUtc)
+    {
+        var start = startUtc.ToLocalTime();
+        var end = endUtc.ToLocalTime();
+        if (start.Date == end.Date)
+        {
+            string day = end.Date == DateTime.Today ? AppText.Get("today") : end.ToString("MMM d", AppText.Culture);
+            return AppText.Format("{0} to {1}, {2}", start.ToString("HH:mm", AppText.Culture), end.ToString("HH:mm", AppText.Culture), day);
+        }
+
+        return AppText.Format("{0} to {1}", start.ToString("MMM d, HH:mm", AppText.Culture), end.ToString("MMM d, HH:mm", AppText.Culture));
+    }
+
+    private static bool TryParseUtc(string value, string format, out DateTime utc)
+    {
+        return DateTime.TryParseExact(
+            value,
+            format,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out utc);
     }
 
     private static int ReadMetadataInt(AuditResult result, string key)
@@ -422,24 +622,28 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
             return 0;
         }
 
-        if (value.ValueKind == System.Text.Json.JsonValueKind.Number && value.TryGetInt32(out var number))
-        {
-            return number;
-        }
-
-        return 0;
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
+            ? number
+            : 0;
     }
 
     private static string ReadMetadataString(AuditResult result, string key)
     {
         if (result.Metadata?.TryGetValue(key, out var value) != true)
         {
-            return "—";
+            return string.Empty;
         }
 
-        return value.ValueKind == System.Text.Json.JsonValueKind.String
-            ? value.GetString() ?? "—"
-            : "—";
+        return value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    private void ShowStatus(InfoBarSeverity severity, string message)
+    {
+        StatusSeverity = severity;
+        StatusMessage = message;
+        IsStatusVisible = true;
     }
 
     private void EnqueueOnUi(Action action)
@@ -455,8 +659,10 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        AppText.Current.LanguageChanged -= OnLanguageChanged;
         _schedulerService.AuditCompleted -= OnAuditCompleted;
         _schedulerService.AuditFailed -= OnAuditFailed;
         _schedulerService.AuditProgress -= OnAuditProgress;
+        _schedulerService.HistoryUpdated -= OnHistoryUpdated;
     }
 }

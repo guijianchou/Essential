@@ -26,12 +26,30 @@ public sealed class AuditFailedEventArgs : EventArgs
     }
 }
 
+public enum AuditStage { Collect, Route, Analyze, Save, Translate, Complete }
+public enum AuditStepState { Pending, Active, Done, Skipped, Failed }
+
 public sealed class AuditProgressEventArgs : EventArgs
 {
-    public string Message { get; }
+    public AuditStage Stage { get; }
+    public AuditStepState State { get; }
+    public string MessageKey { get; }
+    public object?[] Arguments { get; }
+    public string Message => AppText.Format(MessageKey, Arguments);
+    public int CompletedBatches { get; init; }
+    public int TotalBatches { get; init; }
 
-    public AuditProgressEventArgs(string message)
+    public AuditProgressEventArgs(AuditStage stage, AuditStepState state, string message, params object?[] arguments)
     {
-        Message = message;
+        Stage = stage;
+        State = state;
+        MessageKey = message;
+        Arguments = arguments;
     }
+}
+
+// Report synchronously so terminal scan events cannot overtake queued progress callbacks.
+internal sealed class AuditProgressReporter(Action<AuditProgressEventArgs> report) : IProgress<AuditProgressEventArgs>
+{
+    public void Report(AuditProgressEventArgs value) => report(value);
 }

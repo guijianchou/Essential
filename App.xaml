@@ -10,27 +10,45 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
 
+            <!--
+                Semantic color tokens. Severity fills carry the finding colors on marks
+                (dots, rules, bars); the text variants are darker/lighter steps that clear
+                text contrast on the card surfaces. "Default" is the dark theme in WinUI.
+            -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
-                    <SolidColorBrush x:Key="LayerCardBackgroundBrush" Color="#66FFFFFF" />
-                    <SolidColorBrush x:Key="InsetBackgroundBrush" Color="#3DFFFFFF" />
+                    <SolidColorBrush x:Key="SeverityHighFillBrush" Color="#E86464" />
+                    <SolidColorBrush x:Key="SeverityMediumFillBrush" Color="#E6A23C" />
+                    <SolidColorBrush x:Key="SeverityLowFillBrush" Color="#6AA3E4" />
+                    <SolidColorBrush x:Key="SeverityHighTextBrush" Color="#F28B8B" />
+                    <SolidColorBrush x:Key="SeverityMediumTextBrush" Color="#F0C27A" />
+                    <SolidColorBrush x:Key="SeverityLowTextBrush" Color="#A6C4E3" />
+                    <SolidColorBrush x:Key="HealthGoodBrush" Color="#3FB950" />
+                    <SolidColorBrush x:Key="HealthWarningBrush" Color="#E6A23C" />
+                    <SolidColorBrush x:Key="HealthRiskBrush" Color="#E86464" />
+                    <SolidColorBrush x:Key="MeterTrackBrush" Color="#26FFFFFF" />
+                    <SolidColorBrush x:Key="FindingCardBackgroundBrush" Color="#0AFFFFFF" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
-                    <SolidColorBrush x:Key="LayerCardBackgroundBrush" Color="#38FFFFFF" />
-                    <SolidColorBrush x:Key="InsetBackgroundBrush" Color="#20FFFFFF" />
-                </ResourceDictionary>
-                <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="LayerCardBackgroundBrush" Color="#66101010" />
-                    <SolidColorBrush x:Key="InsetBackgroundBrush" Color="#33101010" />
+                    <SolidColorBrush x:Key="SeverityHighFillBrush" Color="#C8302F" />
+                    <SolidColorBrush x:Key="SeverityMediumFillBrush" Color="#E8891F" />
+                    <SolidColorBrush x:Key="SeverityLowFillBrush" Color="#3F7FC0" />
+                    <SolidColorBrush x:Key="SeverityHighTextBrush" Color="#B32626" />
+                    <SolidColorBrush x:Key="SeverityMediumTextBrush" Color="#A84A10" />
+                    <SolidColorBrush x:Key="SeverityLowTextBrush" Color="#3B5F85" />
+                    <SolidColorBrush x:Key="HealthGoodBrush" Color="#107C10" />
+                    <SolidColorBrush x:Key="HealthWarningBrush" Color="#E8891F" />
+                    <SolidColorBrush x:Key="HealthRiskBrush" Color="#C8302F" />
+                    <SolidColorBrush x:Key="MeterTrackBrush" Color="#14000000" />
+                    <SolidColorBrush x:Key="FindingCardBackgroundBrush" Color="#80FFFFFF" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
+            <!-- One typeface for the whole app. -->
             <FontFamily x:Key="AppFontFamily">Segoe UI Variable</FontFamily>
-            <FontFamily x:Key="AppMonoFontFamily">Cascadia Mono</FontFamily>
             <FontFamily x:Key="ContentControlThemeFontFamily">Segoe UI Variable</FontFamily>
 
-            <x:Double x:Key="AppGutter">48</x:Double>
-            <x:Double x:Key="CardPadding">18</x:Double>
+            <x:Double x:Key="PageGutter">32</x:Double>
             <x:Double x:Key="SectionSpacing">16</x:Double>
 
             <helpers:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
@@ -38,104 +56,122 @@
             <helpers:DoubleFormatConverter x:Key="DoubleFormatConverter" />
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
             <converters:InverseBoolConverter x:Key="InverseBoolConverter" />
-            <converters:SeverityToBrushConverter x:Key="SeverityToBrushConverter" />
+            <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter" />
             <converters:ModeToIndexConverter x:Key="ModeToIndexConverter" />
             <converters:ModelToIndexConverter x:Key="ModelToIndexConverter" />
             <converters:EffortToIndexConverter x:Key="EffortToIndexConverter" />
 
+            <!-- Type ramp (sentence case everywhere; no tracking, no small caps). -->
             <Style x:Key="AppTextStyle" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
+                <Setter Property="TextWrapping" Value="NoWrap" />
             </Style>
             <Style TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}" />
 
-            <Style x:Key="LayerCardStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource LayerCardBackgroundBrush}" />
-                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-                <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="8" />
-            </Style>
-
-            <Style x:Key="InsetWellStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource InsetBackgroundBrush}" />
-                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
-                <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="6" />
-            </Style>
-
-            <Style x:Key="SettingsCardStyle" TargetType="Border" BasedOn="{StaticResource LayerCardStyle}">
-                <Setter Property="CornerRadius" Value="6" />
-                <Setter Property="MinHeight" Value="64" />
-                <Setter Property="Padding" Value="16,14" />
-            </Style>
-
-            <Style x:Key="SectionLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
-                <Setter Property="FontSize" Value="11" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="CharacterSpacing" Value="80" />
-                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
-                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                <Setter Property="VerticalAlignment" Value="Center" />
-            </Style>
-
-            <Style x:Key="MetaLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
-                <Setter Property="FontSize" Value="10" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="CharacterSpacing" Value="60" />
+            <Style x:Key="CaptionTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+                <Setter Property="FontSize" Value="12" />
                 <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
                 <Setter Property="TextTrimming" Value="CharacterEllipsis" />
             </Style>
-
-            <Style x:Key="MetricPrimaryStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+            <Style x:Key="CaptionStrongTextStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}">
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="BodySmallTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+            <Style x:Key="BodyTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+            <Style x:Key="BodyStrongTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            </Style>
+            <Style x:Key="SubtitleTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
                 <Setter Property="FontSize" Value="20" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="TextTrimming" Value="CharacterEllipsis" />
             </Style>
+            <Style x:Key="TitleTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+                <Setter Property="FontSize" Value="28" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="StatValueStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+                <Setter Property="FontSize" Value="28" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+                <Setter Property="LineHeight" Value="34" />
+            </Style>
+            <Style x:Key="HeroNumberStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+                <Setter Property="FontSize" Value="64" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+                <Setter Property="LineHeight" Value="68" />
+            </Style>
 
-            <Style x:Key="MetricCompactStyle" TargetType="TextBlock" BasedOn="{StaticResource MetricPrimaryStyle}">
+            <!-- Legacy keys kept for the settings page; all now map onto the ramp above. -->
+            <Style x:Key="PageTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource SubtitleTextStyle}" />
+            <Style x:Key="SecondaryTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+            <Style x:Key="SectionLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionStrongTextStyle}" />
+            <Style x:Key="MetaLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}" />
+            <Style x:Key="MetricPrimaryStyle" TargetType="TextBlock" BasedOn="{StaticResource SubtitleTextStyle}" />
+            <Style x:Key="MetricCompactStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
                 <Setter Property="FontSize" Value="18" />
+                <Setter Property="FontWeight" Value="SemiBold" />
             </Style>
-
-            <Style x:Key="MetricStrongStyle" TargetType="TextBlock" BasedOn="{StaticResource MetricPrimaryStyle}">
-                <Setter Property="FontSize" Value="15" />
-            </Style>
-
+            <Style x:Key="MetricStrongStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextStyle}" />
             <Style x:Key="MetricSecondaryStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
                 <Setter Property="FontSize" Value="13" />
                 <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            </Style>
+            <Style x:Key="NumericTextStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}" />
+            <Style x:Key="MonoDetailStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}">
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+            <Style x:Key="MonoTextBoxStyle" TargetType="TextBox">
+                <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="VerticalAlignment" Value="Center" />
             </Style>
 
-            <Style x:Key="NumericTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
-                <Setter Property="FontSize" Value="12" />
+            <!-- Surfaces -->
+            <Style x:Key="CardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Padding" Value="20,18" />
             </Style>
-
-            <Style x:Key="MonoDetailStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
-                <Setter Property="FontFamily" Value="{StaticResource AppMonoFontFamily}" />
-                <Setter Property="FontSize" Value="11" />
-                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
-                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                <Setter Property="TextWrapping" Value="NoWrap" />
+            <Style x:Key="TileStyle" TargetType="Border" BasedOn="{StaticResource CardStyle}">
+                <Setter Property="Padding" Value="18,14" />
             </Style>
-
-            <Style x:Key="SecondaryTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
-                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+            <Style x:Key="LayerCardStyle" TargetType="Border" BasedOn="{StaticResource CardStyle}" />
+            <Style x:Key="InsetWellStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource LayerFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="6" />
             </Style>
-
+            <Style x:Key="FindingCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource FindingCardBackgroundBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="6" />
+            </Style>
+            <Style x:Key="SettingsCardStyle" TargetType="Border" BasedOn="{StaticResource CardStyle}">
+                <Setter Property="CornerRadius" Value="6" />
+                <Setter Property="MinHeight" Value="64" />
+                <Setter Property="Padding" Value="16,14" />
+            </Style>
             <Style x:Key="CardRuleStyle" TargetType="Border">
                 <Setter Property="Height" Value="1" />
                 <Setter Property="Background" Value="{ThemeResource DividerStrokeColorDefaultBrush}" />
                 <Setter Property="HorizontalAlignment" Value="Stretch" />
-            </Style>
-
-            <Style x:Key="PageTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource AppTextStyle}">
-                <Setter Property="FontSize" Value="22" />
-                <Setter Property="FontWeight" Value="SemiBold" />
-            </Style>
-
-            <Style x:Key="MonoTextBoxStyle" TargetType="TextBox">
-                <Setter Property="FontFamily" Value="{StaticResource AppMonoFontFamily}" />
-                <Setter Property="FontSize" Value="12" />
-                <Setter Property="VerticalAlignment" Value="Center" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

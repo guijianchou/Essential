@@ -5,7 +5,7 @@
     xmlns:models="using:LocalSecurityAudit.Models"
     x:Name="PageRoot"
     Background="Transparent">
-    <Grid Background="Transparent">
+    <Grid Background="Transparent" RowDefinitions="Auto,*">
         <Grid.Resources>
             <Style x:Key="SettingsRowContainerStyle" TargetType="ListViewItem">
                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -13,76 +13,70 @@
                 <Setter Property="MinHeight" Value="0" />
                 <Setter Property="Margin" Value="0" />
             </Style>
+            <Style x:Key="SettingTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextStyle}" />
+            <Style x:Key="SettingDescriptionStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextStyle}">
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="TextTrimming" Value="None" />
+            </Style>
+            <Style x:Key="FormLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource BodySmallTextStyle}">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="TextWrapping" Value="NoWrap" />
+            </Style>
         </Grid.Resources>
+
+        <Grid Grid.Row="0" Padding="32,18,32,4">
+            <StackPanel Spacing="2">
+                <TextBlock Text="{Binding [Settings], Source={StaticResource AppText}}" Style="{StaticResource SubtitleTextStyle}" />
+                <TextBlock Text="{Binding [Changesapplytothenextauditafteryousave], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+            </StackPanel>
+        </Grid>
+
         <NavigationView x:Name="NavView"
-                        PaneDisplayMode="Left"
-                        IsPaneOpen="True"
-                        IsPaneToggleButtonVisible="False"
+                        Grid.Row="1"
+                        Margin="20,0,0,0"
+                        PaneDisplayMode="Top"
                         IsBackButtonVisible="Collapsed"
                         IsSettingsVisible="False"
-                        OpenPaneLength="180"
-                        AutomationProperties.Name="Settings sections"
-            SelectionChanged="OnNavViewSelectionChanged">
+                        AutomationProperties.Name="{Binding [Settingssections], Source={StaticResource AppText}}"
+                        SelectionChanged="OnNavViewSelectionChanged">
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="Appearance" Tag="appearance" IsSelected="True">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE771;" FontSize="14" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="AI" Tag="ai">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE950;" FontSize="14" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="Scanning" Tag="scanning">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE8B7;" FontSize="14" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="Storage" Tag="storage">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE823;" FontSize="14" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="About" Tag="about">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE946;" FontSize="14" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
+                <NavigationViewItem Content="{Binding [Appearance], Source={StaticResource AppText}}" Tag="appearance" IsSelected="True" />
+                <NavigationViewItem Content="{Binding [AIanalysis], Source={StaticResource AppText}}" Tag="ai" />
+                <NavigationViewItem Content="{Binding [Scanning], Source={StaticResource AppText}}" Tag="scanning" />
+                <NavigationViewItem Content="{Binding [Storage], Source={StaticResource AppText}}" Tag="storage" />
+                <NavigationViewItem Content="{Binding [About], Source={StaticResource AppText}}" Tag="about" />
             </NavigationView.MenuItems>
 
-            <ScrollViewer Padding="28,24,48,28" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                <Grid RowDefinitions="Auto,Auto" RowSpacing="18">
-                    <InfoBar Grid.Row="0"
-                             IsOpen="{x:Bind ViewModel.ShowOperationStatus, Mode=TwoWay}"
+            <ScrollViewer Padding="12,12,32,28" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="16">
+                    <InfoBar IsOpen="{x:Bind ViewModel.ShowOperationStatus, Mode=TwoWay}"
                              Severity="{x:Bind ViewModel.OperationSeverity, Mode=OneWay}"
                              Message="{x:Bind ViewModel.OperationMessage, Mode=OneWay}"
                              IsClosable="True"
                              Closed="OnInfoBarClosed" />
 
-                    <Grid Grid.Row="1">
-                        <StackPanel x:Name="AppearancePage" Spacing="16">
+                    <Grid>
+                        <!-- Appearance -->
+                        <StackPanel x:Name="AppearancePage" Spacing="12">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="Appearance" Style="{StaticResource PageTitleStyle}" />
-                                    <TextBlock Text="Tune the window surface and color mode for your desktop." Style="{StaticResource SecondaryTextStyle}" FontSize="12" />
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding [Appearance], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
+                                    <TextBlock Text="{Binding [Windowsurfaceandcolormode], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <Button Content="Reset" Command="{x:Bind ViewModel.ResetAppearanceSettingsCommand}" AutomationProperties.Name="Reset appearance settings" />
-                                    <Button Content="Save" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveSettingsCommand}" AutomationProperties.Name="Save appearance settings" />
+                                    <Button Content="{Binding [Reset], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.ResetAppearanceSettingsCommand}" AutomationProperties.Name="{Binding [Resetappearancesettings], Source={StaticResource AppText}}" />
+                                    <Button Content="{Binding [Save], Source={StaticResource AppText}}" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveSettingsCommand}" AutomationProperties.Name="{Binding [Saveappearancesettings], Source={StaticResource AppText}}" />
                                 </StackPanel>
                             </Grid>
 
                             <Border Style="{StaticResource SettingsCardStyle}">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                                    <StackPanel Spacing="3">
-                                        <TextBlock Text="Application theme" FontSize="14" FontWeight="SemiBold" />
-                                        <TextBlock Text="Use the Windows preference or choose a fixed light or dark theme." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" />
-                                    </StackPanel>
-                                    <ComboBox Grid.Column="1" Width="150" SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}">
-                                        <ComboBoxItem Content="System default" />
-                                        <ComboBoxItem Content="Light" />
-                                        <ComboBoxItem Content="Dark" />
+                                    <TextBlock Text="{Binding [Language], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1" Width="180" SelectedIndex="{x:Bind ViewModel.LanguageIndex, Mode=TwoWay}"
+                                              AutomationProperties.Name="{Binding [Language], Source={StaticResource AppText}}">
+                                        <ComboBoxItem Content="{Binding [English], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="&#x7B80;&#x4F53;&#x4E2D;&#x6587;" />
                                     </ComboBox>
                                 </Grid>
                             </Border>
@@ -90,155 +84,322 @@
                             <Border Style="{StaticResource SettingsCardStyle}">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                                     <StackPanel Spacing="3">
-                                        <TextBlock Text="Minimize to notification area" FontSize="14" FontWeight="SemiBold" />
-                                        <TextBlock Text="Keep the audit service running when the window is closed. Restore or exit from the tray icon. Alert notifications can also keep the icon available." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding [Applicationtheme], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [FollowtheWindowspreferenceorchooseafixedlightordarktheme], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                     </StackPanel>
-                                    <ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.MinimizeToTray, Mode=TwoWay}" OnContent="" OffContent="" AutomationProperties.Name="Minimize to notification area" />
+                                    <ComboBox Grid.Column="1" Width="160" VerticalAlignment="Center" SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="{Binding [Systemdefault], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Light], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Dark], Source={StaticResource AppText}}" />
+                                    </ComboBox>
                                 </Grid>
                             </Border>
 
-                            <Border Style="{StaticResource InsetWellStyle}" Padding="16,14">
-                                <StackPanel Spacing="6">
-                                    <TextBlock Text="MICA SURFACE" Style="{StaticResource SectionLabelStyle}" />
-                                    <TextBlock Text="This window uses the WinUI 3 Mica BaseAlt material. Transparent content layers keep the desktop tint visible behind cards and navigation." Style="{StaticResource SecondaryTextStyle}" FontSize="12" TextWrapping="Wrap" />
-                                </StackPanel>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding [Minimizetothenotificationarea], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [KeeptheauditservicerunningwhenthewindowisclosedRestoreorexitfromthetrayicon], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.MinimizeToTray, Mode=TwoWay}" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="{Binding [Minimizetothenotificationarea], Source={StaticResource AppText}}" />
+                                </Grid>
                             </Border>
                         </StackPanel>
 
-                        <StackPanel x:Name="AiPage" Spacing="16" Visibility="Collapsed">
+                        <!-- AI analysis -->
+                        <StackPanel x:Name="AiPage" Spacing="12" Visibility="Collapsed">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="AI configuration" Style="{StaticResource PageTitleStyle}" />
-                                    <TextBlock Text="Choose the endpoint used to analyze local event logs." Style="{StaticResource SecondaryTextStyle}" FontSize="12" />
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding [AIanalysis], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
+                                    <TextBlock Text="{Binding [LunareadseachbatchofeventsandreturnsfindingsinafixedJSONcontractOnlyLunaissupportedatthemoment], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <Button Content="Reset" Command="{x:Bind ViewModel.ResetAiSettingsCommand}" AutomationProperties.Name="Reset AI settings" />
-                                    <Button Content="Save" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveSettingsCommand}" AutomationProperties.Name="Save AI settings" />
+                                    <Button Content="{Binding [Reset], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.ResetAiSettingsCommand}" AutomationProperties.Name="{Binding [ResetAIsettings], Source={StaticResource AppText}}" />
+                                    <Button Content="{Binding [Save], Source={StaticResource AppText}}" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveSettingsCommand}" AutomationProperties.Name="{Binding [SaveAIsettings], Source={StaticResource AppText}}" />
                                 </StackPanel>
                             </Grid>
 
-                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-                                <Button Content="Add target" Command="{x:Bind ViewModel.AddTargetCommand}" AutomationProperties.Name="Add AI target" />
-                                <TextBlock Grid.Column="1" Text="Changes are applied to the next audit." Style="{StaticResource SecondaryTextStyle}" FontSize="12" VerticalAlignment="Center" Margin="4,0" />
-                            </Grid>
+                            <!-- Request pipeline -->
+                            <Border Style="{StaticResource SettingsCardStyle}" Padding="18,16">
+                                <StackPanel Spacing="14">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding [Requestpipeline], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{x:Bind ViewModel.ActiveTargetSummary, Mode=OneWay}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <Grid ColumnDefinitions="*,Auto,*,Auto,*,Auto,*,Auto,*" ColumnSpacing="10">
+                                        <StackPanel Grid.Column="0" Spacing="4">
+                                            <TextBlock Text="{Binding [Collect], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="13" />
+                                            <TextBlock Text="{x:Bind ViewModel.PipelineCollectText, Mode=OneWay}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        </StackPanel>
+                                        <FontIcon Grid.Column="1" Glyph="&#xE76C;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Top" Margin="0,4,0,0" />
+                                        <StackPanel Grid.Column="2" Spacing="4">
+                                            <TextBlock Text="{Binding [Batch], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="13" />
+                                            <TextBlock Text="{x:Bind ViewModel.PipelineBatchText, Mode=OneWay}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        </StackPanel>
+                                        <FontIcon Grid.Column="3" Glyph="&#xE76C;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Top" Margin="0,4,0,0" />
+                                        <StackPanel Grid.Column="4" Spacing="4">
+                                            <TextBlock Text="{Binding [Analyze], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="13" />
+                                            <TextBlock Text="{x:Bind ViewModel.PipelineAnalyzeText, Mode=OneWay}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        </StackPanel>
+                                        <FontIcon Grid.Column="5" Glyph="&#xE76C;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Top" Margin="0,4,0,0" />
+                                        <StackPanel Grid.Column="6" Spacing="4">
+                                            <TextBlock Text="{Binding [Parse], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="13" />
+                                            <TextBlock Text="{x:Bind ViewModel.PipelineParseText, Mode=OneWay}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        </StackPanel>
+                                        <FontIcon Grid.Column="7" Glyph="&#xE76C;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Top" Margin="0,4,0,0" />
+                                        <StackPanel Grid.Column="8" Spacing="4">
+                                            <TextBlock Text="{Binding [Store], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="13" />
+                                            <TextBlock Text="{x:Bind ViewModel.PipelineStoreText, Mode=OneWay}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
 
-                            <Border Style="{StaticResource SettingsCardStyle}" Padding="16,14">
+                            <!-- Audit policy -->
+                            <Border Style="{StaticResource SettingsCardStyle}" Padding="18,16">
                                 <StackPanel Spacing="10">
                                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                         <StackPanel Spacing="3">
-                                            <TextBlock Text="AGENTS.md audit policy" FontSize="14" FontWeight="SemiBold" />
-                                            <TextBlock Text="Plain-text rules sent to the AI as audit context. They are never executed by the app." Style="{StaticResource SecondaryTextStyle}" FontSize="12" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding [Auditpolicy], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                            <TextBlock Text="{Binding [PlaintextrulessenttoLunawitheverybatchevidencerulesseverityrubriccategorytaxonomyandtheJSONoutputcontractTheappneverexecutesthem], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                         </StackPanel>
-                                        <Button Grid.Column="1" Content="Reset policy" Command="{x:Bind ViewModel.ResetAgentInstructionsCommand}" AutomationProperties.Name="Reset AGENTS.md audit policy" />
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top">
+                                            <TextBlock Text="{x:Bind ViewModel.PolicyStatusText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                                            <Button Content="{Binding [Resetpolicy], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.ResetAgentInstructionsCommand}" AutomationProperties.Name="{Binding [Resetauditpolicy], Source={StaticResource AppText}}" />
+                                        </StackPanel>
                                     </Grid>
                                     <TextBox Text="{x:Bind ViewModel.AgentInstructions, Mode=TwoWay}"
                                              AcceptsReturn="True"
                                              TextWrapping="Wrap"
-                                             MinHeight="180"
-                                             MaxHeight="300"
-                                             MaxLength="16000"
+                                             MinHeight="240"
+                                             MaxHeight="420"
+                                             MaxLength="32000"
+                                             FontSize="13"
                                              ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                             PlaceholderText="Describe evidence rules, severity guidance, and safe recommendations..."
-                                             AutomationProperties.Name="AGENTS.md audit policy" />
-                                    <TextBlock Text="{x:Bind ViewModel.AgentInstructionsPath, Mode=OneWay}"
-                                               Style="{StaticResource MonoDetailStyle}"
-                                               TextTrimming="CharacterEllipsis"
-                                               ToolTipService.ToolTip="The policy is also saved as this local AGENTS.md file." />
+                                             PlaceholderText="{Binding [Describeevidencerulesseverityguidanceandtheoutputcontract], Source={StaticResource AppText}}"
+                                             AutomationProperties.Name="{Binding [Auditpolicy], Source={StaticResource AppText}}" />
+                                    <TextBlock Style="{StaticResource CaptionTextStyle}" ToolTipService.ToolTip="{Binding [ThepolicyisalsosavedasthislocalAGENTSmdfile], Source={StaticResource AppText}}">
+                                        <Run Text="{Binding [Alsosavedas], Source={StaticResource AppText}}" /><Run Text="{x:Bind ViewModel.AgentInstructionsPath, Mode=OneWay}" />
+                                    </TextBlock>
                                 </StackPanel>
                             </Border>
+
+                            <!-- Endpoints -->
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" Margin="0,6,0,0">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding [Endpoints], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                     <TextBlock Text="{Binding [MainreceivesrequestsfirstAnoptionalFallbackisusedonlyafterMainfailsleaveitsURLemptytodisableit], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                 </StackPanel>
+                             </Grid>
 
                             <ListView ItemsSource="{x:Bind ViewModel.AiTargets, Mode=OneWay}"
                                       SelectionMode="None"
                                       ItemContainerStyle="{StaticResource SettingsRowContainerStyle}">
                                 <ListView.ItemTemplate>
                                     <DataTemplate x:DataType="models:AiTarget">
-                                         <Expander Margin="0,0,0,10" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" AutomationProperties.Name="{x:Bind Name}">
+                                        <Expander Margin="0,0,0,8" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" AutomationProperties.Name="{x:Bind Name}">
                                             <Expander.Header>
-                                                <Grid Padding="0,6" ColumnDefinitions="8,*,Auto,Auto" ColumnSpacing="10">
-                                                    <Ellipse Width="8" Height="8" Fill="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
-                                                    <TextBlock Grid.Column="1" Text="{x:Bind Name, Mode=OneWay}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                                        <TextBlock Text="{x:Bind Model, Mode=OneWay}" Style="{StaticResource NumericTextStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                                        <TextBlock Text="ACTIVE" Style="{StaticResource MetaLabelStyle}" Foreground="{ThemeResource AccentFillColorDefaultBrush}" Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                <Grid Padding="0,8" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                                    <StackPanel Spacing="2">
+                                                        <TextBlock Text="{x:Bind Name, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" />
+                                                        <TextBlock Text="{x:Bind BaseUrl, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
                                                     </StackPanel>
-                                                    <Button Grid.Column="3" Padding="6" Background="Transparent" BorderThickness="0" Tag="{x:Bind}" Click="OnRemoveTargetClicked" ToolTipService.ToolTip="Delete target">
-                                                       <FontIcon Glyph="&#xE74D;" FontSize="13" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
-                                                    </Button>
+                                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                                         <TextBlock Text="{x:Bind Effort, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
+                                                         <TextBlock Text="{Binding [Mainfirst], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                         <TextBlock Text="{Binding [Optionalfallback], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
+                                                    </StackPanel>
                                                 </Grid>
                                             </Expander.Header>
-                                            <Border Style="{StaticResource SettingsCardStyle}" Padding="16,14">
-                                                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="96,*,Auto" ColumnSpacing="12" RowSpacing="10">
-                                                    <TextBlock Text="NAME" Style="{StaticResource MetaLabelStyle}" VerticalAlignment="Center" />
-                                                    <TextBox Grid.Column="1" Text="{x:Bind Name, Mode=TwoWay}" PlaceholderText="Target name" />
-                                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
-                                                        <Button Content="Use" Tag="{x:Bind}" Click="OnSetActiveTargetClicked" AutomationProperties.Name="Use this AI target" />
-                                                        <Button Content="Test" Tag="{x:Bind}" Click="OnTestApiConnectionClicked" AutomationProperties.Name="Test AI target connection" />
-                                                    </StackPanel>
+                                            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="128,*" ColumnSpacing="14" RowSpacing="10" Padding="4,6,4,4">
+                                                <TextBlock Grid.Row="0" Text="{Binding [Name], Source={StaticResource AppText}}" Style="{StaticResource FormLabelStyle}" />
+                                                 <TextBox Grid.Row="0" Grid.Column="1" Text="{x:Bind Name, Mode=OneWay}" IsReadOnly="True" />
 
-                                                    <TextBlock Grid.Row="1" Text="BASE URL" Style="{StaticResource MetaLabelStyle}" VerticalAlignment="Center" />
-                                                    <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{x:Bind BaseUrl, Mode=TwoWay}" Style="{StaticResource MonoTextBoxStyle}" PlaceholderText="https://api.example.com" />
-                                                    <TextBlock Grid.Row="2" Text="API KEY" Style="{StaticResource MetaLabelStyle}" VerticalAlignment="Center" />
-                                                    <PasswordBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" PlaceholderText="Enter API key" PasswordChanged="OnTargetPasswordChanged" />
-                                                    <TextBlock Grid.Row="3" Text="MODE" Style="{StaticResource MetaLabelStyle}" VerticalAlignment="Center" />
-                                                    <ComboBox Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" SelectedIndex="{x:Bind Mode, Mode=TwoWay, Converter={StaticResource ModeToIndexConverter}}">
-                                                        <ComboBoxItem Content="chat" />
-                                                        <ComboBoxItem Content="responses" />
+                                                <TextBlock Grid.Row="1" Text="{Binding [EndpointURL], Source={StaticResource AppText}}" Style="{StaticResource FormLabelStyle}" />
+                                                <TextBox Grid.Row="1" Grid.Column="1" Text="{x:Bind BaseUrl, Mode=TwoWay}" PlaceholderText="https://api.example.com" />
+
+                                                <TextBlock Grid.Row="2" Text="{Binding [APIkey], Source={StaticResource AppText}}" Style="{StaticResource FormLabelStyle}" />
+                                                <PasswordBox Grid.Row="2" Grid.Column="1" PlaceholderText="{Binding [EnterorpastetheAPIkey], Source={StaticResource AppText}}" PasswordChanged="OnTargetPasswordChanged" />
+
+                                                <TextBlock Grid.Row="3" Text="{Binding [APImode], Source={StaticResource AppText}}" Style="{StaticResource FormLabelStyle}" />
+                                                <ComboBox Grid.Row="3" Grid.Column="1" MinWidth="260" SelectedIndex="{x:Bind Mode, Mode=TwoWay, Converter={StaticResource ModeToIndexConverter}}">
+                                                    <ComboBoxItem Content="chat (/v1/chat/completions)" />
+                                                    <ComboBoxItem Content="responses (/v1/responses)" />
+                                                </ComboBox>
+
+                                                <TextBlock Grid.Row="4" Text="{Binding [Model], Source={StaticResource AppText}}" Style="{StaticResource FormLabelStyle}" />
+                                                <StackPanel Grid.Row="4" Grid.Column="1" Spacing="4">
+                                                    <ComboBox MinWidth="260" SelectedIndex="{x:Bind Model, Mode=TwoWay, Converter={StaticResource ModelToIndexConverter}}">
+                                                        <ComboBoxItem Content="{Binding [gpt56lunaLuna256kcontext], Source={StaticResource AppText}}" />
                                                     </ComboBox>
-                                                    <TextBlock Grid.Row="4" Text="MODEL" Style="{StaticResource MetaLabelStyle}" VerticalAlignment="Center" />
-                                                    <ComboBox Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" SelectedIndex="{x:Bind Model, Mode=TwoWay, Converter={StaticResource ModelToIndexConverter}}">
-                                                        <ComboBoxItem Content="gpt-5.6-sol" />
-                                                        <ComboBoxItem Content="gpt-5.6-luna" />
-                                                        <ComboBoxItem Content="gpt-5.6-terra" />
-                                                    </ComboBox>
-                                                    <TextBlock Grid.Row="5" Text="EFFORT" Style="{StaticResource MetaLabelStyle}" VerticalAlignment="Center" />
-                                                    <ComboBox Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2" SelectedIndex="{x:Bind Effort, Mode=TwoWay, Converter={StaticResource EffortToIndexConverter}}">
-                                                        <ComboBoxItem Content="low" />
-                                                        <ComboBoxItem Content="medium" />
-                                                        <ComboBoxItem Content="high" />
-                                                        <ComboBoxItem Content="xhigh" />
-                                                        <ComboBoxItem Content="max" />
-                                                    </ComboBox>
-                                                </Grid>
-                                            </Border>
+                                                    <TextBlock Text="{Binding [OnlyLunaissupportedatthemomentBatchsizesandthecontextbudgetaretunedforit], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                                </StackPanel>
+
+                                                <TextBlock Grid.Row="5" Text="{Binding [Reasoningeffort], Source={StaticResource AppText}}" Style="{StaticResource FormLabelStyle}" />
+                                                <ComboBox Grid.Row="5" Grid.Column="1" MinWidth="260" SelectedIndex="{x:Bind Effort, Mode=TwoWay, Converter={StaticResource EffortToIndexConverter}}">
+                                                    <ComboBoxItem Content="{Binding [low], Source={StaticResource AppText}}" />
+                                                    <ComboBoxItem Content="{Binding [medium], Source={StaticResource AppText}}" />
+                                                    <ComboBoxItem Content="{Binding [high], Source={StaticResource AppText}}" />
+                                                    <ComboBoxItem Content="{Binding [xhigh], Source={StaticResource AppText}}" />
+                                                    <ComboBoxItem Content="{Binding [max], Source={StaticResource AppText}}" />
+                                                </ComboBox>
+
+                                                <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                                                     <Button Content="{Binding [Testconnection], Source={StaticResource AppText}}" Tag="{x:Bind}" Click="OnTestApiConnectionClicked" AutomationProperties.Name="{Binding [Testconnection], Source={StaticResource AppText}}" />
+                                                     <Button Content="{Binding [Clearfallback], Source={StaticResource AppText}}" Tag="{x:Bind}" Click="OnRemoveTargetClicked" AutomationProperties.Name="{Binding [Clearfallback], Source={StaticResource AppText}}" Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
+                                                </StackPanel>
+                                            </Grid>
                                         </Expander>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
                         </StackPanel>
 
-                        <StackPanel x:Name="ScanningPage" Spacing="16" Visibility="Collapsed">
+                        <!-- Scanning -->
+                        <StackPanel x:Name="ScanningPage" Spacing="12" Visibility="Collapsed">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                                <StackPanel Spacing="3">
-                                    <TextBlock Text="Scanning" Style="{StaticResource PageTitleStyle}" />
-                                    <TextBlock Text="Control when audits run and how much history a fast scan covers." Style="{StaticResource SecondaryTextStyle}" FontSize="12" />
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding [Scanning], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
+                                    <TextBlock Text="{Binding [Whenauditsrunandhowmuchhistoryafastscancovers], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <Button Content="Reset" Command="{x:Bind ViewModel.ResetScanningSettingsCommand}" AutomationProperties.Name="Reset scanning settings" />
-                                    <Button Content="Save" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveSettingsCommand}" AutomationProperties.Name="Save scanning settings" />
+                                    <Button Content="{Binding [Reset], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.ResetScanningSettingsCommand}" AutomationProperties.Name="{Binding [Resetscanningsettings], Source={StaticResource AppText}}" />
+                                    <Button Content="{Binding [Save], Source={StaticResource AppText}}" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveSettingsCommand}" AutomationProperties.Name="{Binding [Savescanningsettings], Source={StaticResource AppText}}" />
                                 </StackPanel>
                             </Grid>
-                            <Border Style="{StaticResource SettingsCardStyle}"><Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="3"><TextBlock Text="Automatic audits" FontSize="14" FontWeight="SemiBold" /><TextBlock Text="Run a background audit using the interval below." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" /></StackPanel><ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.AutoScanEnabled, Mode=TwoWay}" OnContent="" OffContent="" /></Grid></Border>
-                            <Border Style="{StaticResource SettingsCardStyle}"><Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="3"><TextBlock Text="Audit interval" FontSize="14" FontWeight="SemiBold" /><TextBlock Text="The scheduler restarts immediately after saving." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" /></StackPanel><ComboBox Grid.Column="1" Width="150" SelectedIndex="{x:Bind ViewModel.ScanIntervalIndex, Mode=TwoWay}"><ComboBoxItem Content="Every hour" /><ComboBoxItem Content="Every 2 hours" /><ComboBoxItem Content="Every 4 hours" /><ComboBoxItem Content="Every 8 hours" /><ComboBoxItem Content="Daily" /></ComboBox></Grid></Border>
-                            <Border Style="{StaticResource SettingsCardStyle}"><Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="3"><TextBlock Text="Fast scan range" FontSize="14" FontWeight="SemiBold" /><TextBlock Text="Choose a fixed range or continue from the previous scan." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" /></StackPanel><ComboBox Grid.Column="1" Width="150" SelectedIndex="{x:Bind ViewModel.FastScanRangeIndex, Mode=TwoWay}"><ComboBoxItem Content="Past 1 hour" /><ComboBoxItem Content="Past 2 hours" /><ComboBoxItem Content="Past 4 hours" /><ComboBoxItem Content="Since last scan" /></ComboBox></Grid></Border>
-                            <Border Style="{StaticResource SettingsCardStyle}"><Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="3"><TextBlock Text="High-severity alerts" FontSize="14" FontWeight="SemiBold" /><TextBlock Text="Keep the preference ready for the notification channel." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" /></StackPanel><ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.HighSeverityNotification, Mode=TwoWay}" OnContent="" OffContent="" /></Grid></Border>
-                            <Border Style="{StaticResource SettingsCardStyle}"><Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="3"><TextBlock Text="Completion alerts" FontSize="14" FontWeight="SemiBold" /><TextBlock Text="Show a notification when an audit completes." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" /></StackPanel><ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.ScanCompleteNotification, Mode=TwoWay}" OnContent="" OffContent="" /></Grid></Border>
-                            <Border Style="{StaticResource SettingsCardStyle}"><Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="3"><TextBlock Text="Diagnostic logging" FontSize="14" FontWeight="SemiBold" /><TextBlock Text="Record scan timings, request status, retries and exception details for troubleshooting. API keys, event text and request bodies are excluded." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" /></StackPanel><ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.DiagnosticLoggingEnabled, Mode=TwoWay}" OnContent="" OffContent="" AutomationProperties.Name="Enable diagnostic logging" /></Grid></Border>
-                            <Border Style="{StaticResource InsetWellStyle}" Padding="16,14"><StackPanel Spacing="5"><TextBlock Text="DIAGNOSTIC LOG FILE" Style="{StaticResource SectionLabelStyle}" /><TextBlock Text="{x:Bind ViewModel.DiagnosticLogPath, Mode=OneWay}" Style="{StaticResource MonoDetailStyle}" TextWrapping="Wrap" /></StackPanel></Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding [Automaticaudits], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [Runabackgroundauditattheintervalbelow], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.AutoScanEnabled, Mode=TwoWay}" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="{Binding [Automaticaudits], Source={StaticResource AppText}}" />
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding [Auditinterval], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [Theschedulerrestartsassoonasyousave], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" Width="160" VerticalAlignment="Center" SelectedIndex="{x:Bind ViewModel.ScanIntervalIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="{Binding [Everyhour], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Every2hours], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Every4hours], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Every8hours], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Daily], Source={StaticResource AppText}}" />
+                                    </ComboBox>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding [Fastscanrange], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [Afixedrangeoreverythingsincethepreviousscan], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" Width="160" VerticalAlignment="Center" SelectedIndex="{x:Bind ViewModel.FastScanRangeIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="{Binding [Pasthour], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Past2hours], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Past4hours], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Sincelastscan], Source={StaticResource AppText}}" />
+                                    </ComboBox>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding [Highseverityalerts], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [Showanotificationwhenanauditreportsahighfinding], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.HighSeverityNotification, Mode=TwoWay}" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="{Binding [Highseverityalerts], Source={StaticResource AppText}}" />
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding [Completionalerts], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [Showanotificationwhenanauditcompletes], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.ScanCompleteNotification, Mode=TwoWay}" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="{Binding [Completionalerts], Source={StaticResource AppText}}" />
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding [Diagnosticlogging], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [RecordscantimingsrequeststatusretriesandexceptionsAPIkeyseventtextandrequestbodiesareneverwritten], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        <TextBlock Text="{x:Bind ViewModel.DiagnosticLogPath, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" Margin="0,4,0,0" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsOn="{x:Bind ViewModel.DiagnosticLoggingEnabled, Mode=TwoWay}" OnContent="" OffContent="" MinWidth="0" AutomationProperties.Name="{Binding [Diagnosticlogging], Source={StaticResource AppText}}" />
+                                </Grid>
+                            </Border>
                         </StackPanel>
 
-                        <StackPanel x:Name="StoragePage" Spacing="16" Visibility="Collapsed">
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="3"><TextBlock Text="Storage" Style="{StaticResource PageTitleStyle}" /><TextBlock Text="Manage local audit history without touching the live scanner." Style="{StaticResource SecondaryTextStyle}" FontSize="12" /></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"><Button Content="Clean old data" Command="{x:Bind ViewModel.CleanupDataCommand}" /><Button Content="Optimize" Command="{x:Bind ViewModel.VacuumDatabaseCommand}" /></StackPanel></Grid>
-                            <Border Style="{StaticResource SettingsCardStyle}"><Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="3"><TextBlock Text="Retention period" FontSize="14" FontWeight="SemiBold" /><TextBlock Text="Records older than this are removed by cleanup and after a scan." FontSize="12" Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" /></StackPanel><ComboBox Grid.Column="1" Width="150" SelectedIndex="{x:Bind ViewModel.RetentionDaysIndex, Mode=TwoWay}"><ComboBoxItem Content="3 days" /><ComboBoxItem Content="7 days" /><ComboBoxItem Content="14 days" /><ComboBoxItem Content="30 days" /></ComboBox></Grid></Border>
-                            <Border Style="{StaticResource InsetWellStyle}" Padding="16,14"><Grid ColumnDefinitions="*,*" ColumnSpacing="20"><StackPanel Spacing="4"><TextBlock Text="DATABASE SIZE" Style="{StaticResource MetaLabelStyle}" /><TextBlock Text="{x:Bind ViewModel.DatabaseSize, Mode=OneWay}" Style="{StaticResource MetricCompactStyle}" /></StackPanel><StackPanel Grid.Column="1" Spacing="4"><TextBlock Text="AUDIT RECORDS" Style="{StaticResource MetaLabelStyle}" /><TextBlock Text="{x:Bind ViewModel.AuditRecordCount, Mode=OneWay}" Style="{StaticResource MetricCompactStyle}" /></StackPanel></Grid></Border>
+                        <!-- Storage -->
+                        <StackPanel x:Name="StoragePage" Spacing="12" Visibility="Collapsed">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding [Storage], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
+                                    <TextBlock Text="{Binding [LocalaudithistoryNothingheretouchesthelivescanner], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <Button Content="{Binding [Cleanolddata], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.CleanupDataCommand}" />
+                                    <Button Content="{Binding [Optimizedatabase], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.VacuumDatabaseCommand}" />
+                                    <Button Content="{Binding [Save], Source={StaticResource AppText}}" Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveSettingsCommand}" AutomationProperties.Name="{Binding [Savestoragesettings], Source={StaticResource AppText}}" />
+                                </StackPanel>
+                            </Grid>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Text="{Binding [Retentionperiod], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [Recordsolderthanthisareremovedbycleanupandaftereachscan], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" Width="160" VerticalAlignment="Center" SelectedIndex="{x:Bind ViewModel.RetentionDaysIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="{Binding [3days], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [7days], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [14days], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [30days], Source={StaticResource AppText}}" />
+                                    </ComboBox>
+                                </Grid>
+                            </Border>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+                                <Border Style="{StaticResource TileStyle}">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="{Binding [Databasesize], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                        <TextBlock Text="{x:Bind ViewModel.DatabaseSize, Mode=OneWay}" Style="{StaticResource StatValueStyle}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="1" Style="{StaticResource TileStyle}">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="{Binding [Auditrecords], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                        <TextBlock Text="{x:Bind ViewModel.AuditRecordCount, Mode=OneWay}" Style="{StaticResource StatValueStyle}" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
                         </StackPanel>
 
-                        <StackPanel x:Name="AboutPage" Spacing="16" Visibility="Collapsed">
-                            <TextBlock Text="About" Style="{StaticResource PageTitleStyle}" />
-                            <Border Style="{StaticResource SettingsCardStyle}" Padding="16,14"><Grid ColumnDefinitions="Auto,*" ColumnSpacing="14"><Image Width="42" Height="42" Source="ms-appx:///Assets/logo-48.png" VerticalAlignment="Top" /><StackPanel Grid.Column="1" Spacing="4"><TextBlock Text="Local Security Audit" FontSize="16" FontWeight="SemiBold" /><TextBlock Text="Version 0.1.0" Style="{StaticResource SecondaryTextStyle}" FontSize="12" /><TextBlock Text="A local Windows event-log audit workspace built with WinUI 3, Mica and SQLite." Style="{StaticResource SecondaryTextStyle}" FontSize="12" TextWrapping="Wrap" /></StackPanel></Grid></Border>
-                            <Border Style="{StaticResource InsetWellStyle}" Padding="16,14"><StackPanel Spacing="6"><TextBlock Text="DATA &amp; PRIVACY" Style="{StaticResource SectionLabelStyle}" /><TextBlock Text="Audit records are stored locally. AI analysis sends selected event summaries to the configured endpoint only when an audit runs." Style="{StaticResource SecondaryTextStyle}" FontSize="12" TextWrapping="Wrap" /></StackPanel></Border>
+                        <!-- About -->
+                        <StackPanel x:Name="AboutPage" Spacing="12" Visibility="Collapsed">
+                            <TextBlock Text="{Binding [About], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                                    <Image Width="42" Height="42" Source="ms-appx:///Assets/logo-48.png" VerticalAlignment="Top" />
+                                    <StackPanel Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="{Binding [LocalSecurityAudit], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
+                                        <TextBlock Text="{Binding [Version010], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                                        <TextBlock Text="{Binding [AlocalWindowseventlogauditworkspacebuiltwithWinUI3MicaandSQLite], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsCardStyle}">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{Binding [Dataandprivacy], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
+                                        <TextBlock Text="{Binding [AuditrecordsstayonthiscomputerScanssendeventsummarieshistoricaltranslationsendsexistinganalysistexttotheconfiguredendpoint], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </Grid>
-                </Grid>
+                </StackPanel>
             </ScrollViewer>
         </NavigationView>
     </Grid>

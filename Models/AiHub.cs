@@ -22,7 +22,7 @@ public partial class AiTarget : ObservableObject
     private string mode = "responses"; // "chat" or "responses"
 
     [ObservableProperty]
-    private string model = "gpt-5.6-sol";
+    private string model = AiTargetSettings.LunaModel;
 
     [ObservableProperty]
     private string effort = "medium"; // low, medium, high, xhigh, max
