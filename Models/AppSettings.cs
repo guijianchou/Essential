@@ -17,6 +17,7 @@ public sealed class AppSettings
     public bool ScanCompleteNotification { get; set; }
     public bool DiagnosticLoggingEnabled { get; set; }
     public string AgentInstructions { get; set; } = "";
+    public string AiKernel { get; set; } = AiKernelCatalog.Http;
     public List<AiTargetSettings> AiTargets { get; set; } = new();
     public string OptimizationModel { get; set; } = AiModelCatalog.Astra;
     public int MaxConcurrentAnalysis { get; set; } = 3;

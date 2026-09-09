@@ -21,7 +21,9 @@ Assert-True ($unexpected.Count -eq 0) 'The package contains user configuration, 
 'PASS Package contains no user configuration, logs or audit data.'
 
 foreach ($relative in 'LocalSecurityAudit.exe', 'LocalSecurityAudit.dll', 'resources.pri', 'Assets/app.ico',
-    'Assets/logo.png', 'Microsoft.ui.xaml.dll', 'Microsoft.Graphics.Canvas.dll', 'Microsoft.Graphics.Canvas.Interop.dll',
+    'Assets/logo-light-32.png', 'Assets/logo-light-48.png', 'Assets/logo-light-256.png',
+    'Assets/logo-dark-32.png', 'Assets/logo-dark-48.png', 'Assets/logo-dark-256.png',
+    'Microsoft.ui.xaml.dll', 'Microsoft.Graphics.Canvas.dll', 'Microsoft.Graphics.Canvas.Interop.dll',
     'libSkiaSharp.dll', 'libHarfBuzzSharp.dll', 'e_sqlite3.dll', 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll',
     'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
     Assert-True (Test-Path -LiteralPath (Join-Path $packageRoot $relative) -PathType Leaf) ('Missing required runtime/resource: ' + $relative)
@@ -49,7 +51,8 @@ Assert-True ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($exe)).Cont
 'PASS Version, x64 architecture and ordinary-permission startup manifest match.'
 
 foreach ($relative in 'AGENTS.md', 'tools/collect-assistant-events.ps1', 'tools/publish-assistant-audit.py',
-    'Assets/app.ico', 'Assets/logo.png', 'Assets/logo-32.png', 'Assets/logo-48.png', 'Assets/logo-256.png') {
+    'Assets/app.ico', 'Assets/logo-light-32.png', 'Assets/logo-light-48.png', 'Assets/logo-light-256.png',
+    'Assets/logo-dark-32.png', 'Assets/logo-dark-48.png', 'Assets/logo-dark-256.png') {
     $sourceHash = (Get-FileHash -LiteralPath (Join-Path $sourceRoot $relative)).Hash
     $packageHash = (Get-FileHash -LiteralPath (Join-Path $packageRoot $relative)).Hash
     Assert-True ($sourceHash -eq $packageHash) ('Stale packaged protocol/tool/asset: ' + $relative)

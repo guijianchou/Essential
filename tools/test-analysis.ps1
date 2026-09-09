@@ -2,7 +2,7 @@
 # streams and an in-memory database; does not load user settings, open event logs
 # or call an AI endpoint.
 param(
-    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll"
+    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll"
 )
 
 $ErrorActionPreference = 'Stop'

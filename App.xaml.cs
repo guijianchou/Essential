@@ -33,6 +33,7 @@ public partial class App : Application
                 // Register Services
                 services.AddSingleton(settings);
                 services.AddSingleton<DiagnosticLogService>();
+                services.AddSingleton<KernelManagerService>();
                 services.AddSingleton<EventLogService>();
                 services.AddSingleton<AiAnalysisService>();
                 services.AddSingleton(sp => DataStorageService.CreateAsync(settings.ActiveMode).GetAwaiter().GetResult());

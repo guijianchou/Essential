@@ -1,7 +1,7 @@
 # Headless tests of the actual guard with private random keys and temporary files.
 # Never launches/kills the audit app, reads user settings, collects logs or requests UAC.
 param(
-    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Release\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll",
+    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Release\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll",
     [switch]$Child,
     [string]$Key,
     [string]$ResultPath,

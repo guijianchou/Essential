@@ -26,6 +26,7 @@ public partial class SettingsViewModel : ObservableObject
     private readonly SettingsService _settingsService;
     private readonly AiAnalysisService _aiAnalysisService;
     private readonly DiagnosticLogService _diagnosticLogService;
+    private readonly KernelManagerService _kernelManagerService;
     private readonly AuditSchedulerService _schedulerService;
     private readonly DispatcherQueue? _dispatcherQueue;
 
@@ -63,6 +64,18 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int languageIndex;
+
+    [ObservableProperty]
+    private int kernelIndex;
+
+    [ObservableProperty]
+    private string kernelStatusText = "";
+
+    [ObservableProperty]
+    private string kernelPathText = "";
+
+    [ObservableProperty]
+    private string kernelLatestText = "";
 
     [ObservableProperty]
     private int scanIntervalIndex;
@@ -124,13 +137,15 @@ public partial class SettingsViewModel : ObservableObject
         SettingsService settingsService,
         AiAnalysisService aiAnalysisService,
         DiagnosticLogService diagnosticLogService,
-        AuditSchedulerService schedulerService)
+        AuditSchedulerService schedulerService,
+        KernelManagerService kernelManagerService)
     {
         _storageService = storageService;
         _settingsService = settingsService;
         _aiAnalysisService = aiAnalysisService;
         _diagnosticLogService = diagnosticLogService;
         _schedulerService = schedulerService;
+        _kernelManagerService = kernelManagerService;
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
         AiTargets.CollectionChanged += OnTargetsCollectionChanged;
@@ -139,12 +154,14 @@ public partial class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(VersionText));
             OnPropertyChanged(nameof(ActiveModeText));
             UpdatePipelineSummary();
+            UpdateKernelStatus();
             UpdatePolicyStatus(AgentInstructions);
             _ = RefreshOptimizationPreviewAsync();
         };
         LoadFromSettings(_settingsService.Current);
         _schedulerService.HistoryUpdated += (_, _) => _ = UpdateDatabaseStatsAsync();
         _ = UpdateDatabaseStatsAsync();
+        UpdateKernelStatus();
     }
 
     [RelayCommand]
@@ -311,6 +328,105 @@ public partial class SettingsViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    [RelayCommand]
+    private async Task DownloadKernelAsync()
+    {
+        if (IsAssistantMode || IsBusy)
+        {
+            return;
+        }
+
+        string kernel = SelectedKernel;
+        if (kernel == AiKernelCatalog.Http)
+        {
+            ShowStatus(InfoBarSeverity.Informational, AppText.Get("HTTP uses the configured endpoint and does not need a kernel download."));
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            ShowStatus(InfoBarSeverity.Informational, AppText.Format("Downloading {0} kernel...", kernel));
+            await _kernelManagerService.DownloadOrUpdateAsync(kernel);
+            UpdateKernelStatus();
+            ShowStatus(InfoBarSeverity.Success, AppText.Format("{0} kernel is ready.", kernel));
+        }
+        catch (Exception ex)
+        {
+            _diagnosticLogService.WriteException($"Kernel download failed: {kernel}", ex);
+            ShowStatus(InfoBarSeverity.Error, AppText.Format("Kernel download failed: {0}", ex.Message));
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task CheckKernelUpdatesAsync()
+    {
+        if (IsAssistantMode || IsBusy)
+        {
+            return;
+        }
+
+        string kernel = SelectedKernel;
+        if (kernel == AiKernelCatalog.Http)
+        {
+            KernelLatestText = AppText.Get("HTTP transport has no separate kernel release.");
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            string latest = await _kernelManagerService.CheckLatestVersionAsync(kernel);
+            KernelLatestText = AppText.Format("Latest official release: {0}", latest);
+        }
+        catch (Exception ex)
+        {
+            KernelLatestText = AppText.Format("Latest release check failed: {0}", ex.Message);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void RefreshKernelStatus() => UpdateKernelStatus();
+
+    public IReadOnlyList<string> KernelOptions => AiKernelCatalog.Kernels;
+
+    private string SelectedKernel => KernelIndex switch
+    {
+        1 => AiKernelCatalog.Codex,
+        2 => AiKernelCatalog.Pi,
+        _ => AiKernelCatalog.Http
+    };
+
+    partial void OnKernelIndexChanged(int value)
+    {
+        UpdateKernelStatus();
+        UpdatePipelineSummary();
+    }
+
+    private void UpdateKernelStatus()
+    {
+        var status = _kernelManagerService.GetStatus(SelectedKernel);
+        KernelStatusText = status.Kernel == AiKernelCatalog.Http
+            ? AppText.Get("Built-in HTTP transport")
+            : status.Installed
+                ? AppText.Format("Installed · {0}", status.Version)
+                : AppText.Get("Not installed · download required");
+        KernelPathText = status.Kernel == AiKernelCatalog.Http
+            ? AppText.Get("Uses the configured AI Hub endpoint")
+            : status.Path;
+        KernelLatestText = status.Kernel == AiKernelCatalog.Http
+            ? AppText.Get("HTTP transport has no separate kernel release.")
+            : AppText.Get("Latest release not checked.");
     }
 
     [RelayCommand]
@@ -533,6 +649,12 @@ public partial class SettingsViewModel : ObservableObject
     {
         ModeIndex = settings.Mode switch { AppMode.Full => 2, AppMode.Extended => 1, _ => 0 };
         LanguageIndex = settings.Language == "zh-CN" ? 1 : 0;
+        KernelIndex = AiKernelCatalog.Normalize(settings.AiKernel) switch
+        {
+            AiKernelCatalog.Codex => 1,
+            AiKernelCatalog.Pi => 2,
+            _ => 0
+        };
         AutoScanEnabled = settings.AutoScanEnabled;
         MinimizeToTray = settings.MinimizeToTray;
         ThemeIndex = settings.Theme switch
@@ -641,6 +763,7 @@ public partial class SettingsViewModel : ObservableObject
             ScanCompleteNotification = ScanCompleteNotification,
             DiagnosticLoggingEnabled = DiagnosticLoggingEnabled,
             AgentInstructions = AgentInstructions,
+            AiKernel = SelectedKernel,
             MaxConcurrentAnalysis = _settingsService.Current.MaxConcurrentAnalysis,
             EnableSmartFiltering = _settingsService.Current.EnableSmartFiltering,
             EnableCaching = _settingsService.Current.EnableCaching,

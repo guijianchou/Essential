@@ -101,6 +101,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _hasRun;
     private DateTime? _savedAt;
     private int _scanVersion;
+    private Dictionary<int, int>? _batchTokenCounts = new();
+    private int _estimatedInputTokens;
     private bool _isDisposed;
 
     public IReadOnlyList<ScanStep> Steps { get; } = Enum.GetValues<AuditStage>().Select(stage => new ScanStep(stage)).ToList();
@@ -133,6 +135,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public string WorkflowCountText => AppText.Format("{0}/{1} stages", Steps.Count(step => step.IsDone
         || step.State == AuditStepState.Skipped && step.CompletionFraction == 1), Steps.Count);
     public string WorkflowProgressLabel => AppText.Get("Stage completion");
+    public string TokenCountText => _estimatedInputTokens > 0
+        ? AppText.Format("Token estimate: ~{0:N0}", _estimatedInputTokens)
+        : AppText.Get("Token estimate: waiting");
     public string ModeText => AppText.Get(LocalSecurityAudit.Models.AppMode.Label(_scheduler.ActiveMode));
     public string WindowTitle => $"{AppText.Get("Local Security Audit")} · {ModeText}";
 
@@ -164,10 +169,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _hasRun = true;
             _savedAt = null;
+            (_batchTokenCounts ??= new()).Clear();
+            _estimatedInputTokens = 0;
             foreach (var scanStep in Steps) scanStep.Reset();
             OnPropertyChanged(nameof(IsWorkflowVisible));
         }
-        else if (IsWorkflowFailed) return;
+        else if (IsWorkflowFailed && !progress.StartsScan) return;
+        if (progress.EstimatedInputTokens > 0 && progress.BatchNumber > 0)
+        {
+            (_batchTokenCounts ??= new())[progress.BatchNumber] = progress.EstimatedInputTokens;
+            _estimatedInputTokens = _batchTokenCounts.Values.Sum();
+        }
         var step = Steps[(int)progress.Stage];
         bool enteringStage = step.State == AuditStepState.Pending && progress.State == AuditStepState.Active;
         if (!step.Update(progress)) return;
@@ -217,6 +229,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(WorkflowPercentText));
         OnPropertyChanged(nameof(WorkflowCountText));
         OnPropertyChanged(nameof(WorkflowProgressLabel));
+        OnPropertyChanged(nameof(TokenCountText));
     }
 
     public void Dispose()

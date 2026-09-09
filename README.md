@@ -1,14 +1,14 @@
 # 本地安全审计系统 (LocalSecurityAudit)
 
-版本: 0.3.7
+版本: 0.3.8
 
 ## 项目概述
 
 这是一个基于 WinUI 3 的 Windows 本地审计展示工具。默认辅助模式由外部 Claude/Codex 分析并写入结果，程序只读展示；拓展模式普通权限采集日志并调用 AI Hub；全量模式额外提权读取 Security。
 
-## 0.3.7 发布入口
+## 0.3.8 发布入口
 
-发布包为 `bin\publish\LocalSecurityAudit-0.3.7-x64.zip`，完整解压后普通打开其中的 `LocalSecurityAudit.exe`，不要只复制 exe。x64 发布包含 .NET 与 Windows App SDK 运行依赖，无需管理员安装。旧配置没有模式字段时默认进入辅助模式，已有配置和历史保留。
+发布包为 `bin\publish\LocalSecurityAudit-0.3.8-x64.zip`，完整解压后普通打开其中的 `LocalSecurityAudit.exe`，不要只复制 exe。x64 发布包含 .NET 与 Windows App SDK 运行依赖，无需管理员安装。旧配置没有模式字段时默认进入辅助模式，已有配置和历史保留。
 
 Responses 模式遵循标准 OpenAI `/v1/responses` 协议：策略使用 `instructions`，日志使用 `input`，开启 SSE 并设置 `store: false`。只有 `response.completed` 中已完成的 `output` 才是最终结果；文本片段结束、`[DONE]` 或连接关闭不代表请求完成。Base URL 可为站点根、`/v1` 或带前缀的 `/v1/`。已有 Chat Completions 模式保持独立，不自动切换模型、推理强度或线路。
 
@@ -121,7 +121,7 @@ LocalSecurityAudit/
 
 4. 普通运行（遵循保存的模式，首次默认辅助）：
    ```powershell
-   .\bin\x64\Release\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe
+   .\bin\x64\Release\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe
    ```
 
 或者在 Visual Studio 中：
@@ -136,7 +136,7 @@ LocalSecurityAudit/
 在 Visual Studio Developer PowerShell 中运行（当前 Win2D 依赖使用 `win10-x64` RID，Windows 11 同样适用）：
 
 ```powershell
-MSBuild LocalSecurityAudit.csproj /restore /t:Publish /p:Configuration=Release /p:Platform=x64 /p:RuntimeIdentifier=win10-x64 /p:SelfContained=true /p:WindowsPackageType=None /p:PublishSingleFile=false /p:PublishTrimmed=false /p:PublishProfile= /p:PublishDir=bin\publish\LocalSecurityAudit-0.3.7-x64
+MSBuild LocalSecurityAudit.csproj /restore /t:Publish /p:Configuration=Release /p:Platform=x64 /p:RuntimeIdentifier=win10-x64 /p:SelfContained=true /p:WindowsPackageType=None /p:PublishSingleFile=false /p:PublishTrimmed=false /p:PublishProfile= /p:PublishDir=bin\publish\LocalSecurityAudit-0.3.8-x64
 ```
 
 将 Visual Studio 的 `VC\Redist\MSVC\<版本>\x64\Microsoft.VC*.CRT` 中 `msvcp140.dll`、`vcruntime140.dll`、`vcruntime140_1.dll` 随包分发；不要从 System32 复制系统文件。打包前执行 `tools/test-publish.ps1 -PublishDirectory <发布目录>`，ZIP 生成后附加 `-ZipPath <ZIP 路径>` 校验每个文件。只压缩已验证的版本发布目录，不压缩整个 bin 或源码目录；已存在的同名发布包不要直接覆盖。

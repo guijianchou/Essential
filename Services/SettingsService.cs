@@ -603,6 +603,7 @@ public sealed class SettingsService
         settings.AgentInstructions = string.IsNullOrWhiteSpace(settings.AgentInstructions)
             ? DefaultAgentInstructions
             : settings.AgentInstructions;
+        settings.AiKernel = AiKernelCatalog.Normalize(settings.AiKernel);
         settings.MaxConcurrentAnalysis = settings.MaxConcurrentAnalysis <= 1
             ? 3
             : Math.Clamp(settings.MaxConcurrentAnalysis, 2, 4);

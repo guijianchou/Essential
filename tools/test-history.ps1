@@ -1,7 +1,7 @@
 # Exercises compiled history/storage code with synthetic data and memory SQLite.
 # Never activates WinUI, reads user settings/event logs, or calls AI endpoints.
 param(
-    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll"
+    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll"
 )
 
 $ErrorActionPreference = 'Stop'

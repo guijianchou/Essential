@@ -1,3 +1,3 @@
 @echo off
 echo Starting LocalSecurityAudit in full-access mode (Windows approval required)...
-start "" "%~dp0bin\x64\Debug\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe" --full
+start "" "%~dp0bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe" --full

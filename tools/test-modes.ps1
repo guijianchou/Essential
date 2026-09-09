@@ -1,6 +1,6 @@
 # Synthetic-only mode/permission guards, mocked collection, Python -> .NET roundtrip and WAL refresh.
 # Does not activate WinUI, elevate, read real settings/logs, or contact any AI endpoint.
-param([string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll")
+param([string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll")
 $ErrorActionPreference = 'Stop'
 $assembly = [Reflection.Assembly]::LoadFrom((Resolve-Path -LiteralPath $AssemblyPath).Path)
 $directory = Split-Path -Parent $assembly.Location
@@ -424,7 +424,7 @@ try {
     Test-Case 'The build has an asInvoker manifest and includes the external workflow' {
         $exe = Join-Path $directory 'LocalSecurityAudit.exe'
         Assert-True ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($exe)).Contains('level="asInvoker"')) 'The executable still requires administrator privileges.'
-            Assert-True ([Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductVersion -eq '0.3.7') 'Product version was not applied.'
+            Assert-True ([Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductVersion -eq '0.3.8') 'Product version was not applied.'
         foreach ($relative in 'AGENTS.md','tools/collect-assistant-events.ps1','tools/publish-assistant-audit.py') {
             Assert-True (Test-Path -LiteralPath (Join-Path $directory $relative)) "Missing packaged workflow file: $relative"
             $source = Join-Path (Split-Path $PSScriptRoot -Parent) $relative

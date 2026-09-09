@@ -17,6 +17,8 @@
             -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
+                    <BitmapImage x:Key="AppLogo32" UriSource="ms-appx:///Assets/logo-dark-32.png" />
+                    <BitmapImage x:Key="AppLogo48" UriSource="ms-appx:///Assets/logo-dark-48.png" />
                     <SolidColorBrush x:Key="SeverityHighFillBrush" Color="#E86464" />
                     <SolidColorBrush x:Key="SeverityMediumFillBrush" Color="#E6A23C" />
                     <SolidColorBrush x:Key="SeverityLowFillBrush" Color="#6AA3E4" />
@@ -30,6 +32,8 @@
                     <SolidColorBrush x:Key="FindingCardBackgroundBrush" Color="#0AFFFFFF" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
+                    <BitmapImage x:Key="AppLogo32" UriSource="ms-appx:///Assets/logo-light-32.png" />
+                    <BitmapImage x:Key="AppLogo48" UriSource="ms-appx:///Assets/logo-light-48.png" />
                     <SolidColorBrush x:Key="SeverityHighFillBrush" Color="#C8302F" />
                     <SolidColorBrush x:Key="SeverityMediumFillBrush" Color="#E8891F" />
                     <SolidColorBrush x:Key="SeverityLowFillBrush" Color="#3F7FC0" />

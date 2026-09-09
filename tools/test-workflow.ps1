@@ -1,6 +1,6 @@
 # Synthetic loopback AI and an in-memory database. No real settings or event logs.
 param(
-    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll",
+    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll",
     [switch]$SimulateConcurrentEdit
 )
 $ErrorActionPreference = 'Stop'

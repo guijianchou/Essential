@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -46,14 +47,24 @@ public sealed partial class AiAnalysisService
 
     private readonly SettingsService _settingsService;
     private readonly DiagnosticLogService _diagnosticLogService;
+    private readonly KernelManagerService? _kernelManagerService;
     private readonly LruCache<string, CachedBatchAnalysis> _analysisCache = new(100);
 
     public AiAnalysisService(
         SettingsService settingsService,
         DiagnosticLogService diagnosticLogService)
+        : this(settingsService, diagnosticLogService, null)
+    {
+    }
+
+    public AiAnalysisService(
+        SettingsService settingsService,
+        DiagnosticLogService diagnosticLogService,
+        KernelManagerService? kernelManagerService)
     {
         _settingsService = settingsService;
         _diagnosticLogService = diagnosticLogService;
+        _kernelManagerService = kernelManagerService;
     }
 
     public async Task<(List<AuditIssue> Issues, int AnalyzedEventCount)> AnalyzeEventsAsync(
@@ -148,7 +159,10 @@ public sealed partial class AiAnalysisService
                     inputTokenBudget,
                     routeState,
                     new AuditProgressReporter(value => progress?.Report(new(value.Stage, value.State, value.MessageKey, value.Arguments)
-                    { BatchNumber = value.Stage == AuditStage.Analyze ? currentBatch : 0 })),
+                    {
+                        BatchNumber = value.Stage == AuditStage.Analyze ? currentBatch : 0,
+                        EstimatedInputTokens = value.EstimatedInputTokens
+                    })),
                     cancellationToken);
                 var issues = RemapIssuesToIndexes(
                     localIssues,
@@ -180,6 +194,55 @@ public sealed partial class AiAnalysisService
     public async Task<(bool Success, string Message)> TestConnectionAsync(AiTarget target)
     {
         _settingsService.EnsureExtendedMode();
+        string selectedKernel = AiKernelCatalog.Normalize(_settingsService.Current.AiKernel);
+        if (selectedKernel != AiKernelCatalog.Http)
+        {
+            if (_kernelManagerService == null)
+            {
+                return (false, AppText.Get("The selected AI kernel is unavailable in this build."));
+            }
+
+            try
+            {
+                string executable = _kernelManagerService.RequireExecutable(selectedKernel);
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = executable,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+                process.StartInfo.ArgumentList.Add(selectedKernel == AiKernelCatalog.Codex ? "--version" : "--version");
+                process.Start();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(ConnectionTestTimeoutSeconds));
+                try
+                {
+                    await process.WaitForExitAsync(timeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+                    throw;
+                }
+                string output = (await process.StandardOutput.ReadToEndAsync()).Trim();
+                string error = (await process.StandardError.ReadToEndAsync()).Trim();
+                if (process.ExitCode == 0)
+                {
+                    return (true, AppText.Format("{0} kernel ready ({1}).", selectedKernel, string.IsNullOrWhiteSpace(output) ? "installed" : output));
+                }
+
+                return (false, AppText.Format("{0} kernel exited with code {1}: {2}", selectedKernel, process.ExitCode, error));
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or Win32Exception or TaskCanceledException)
+            {
+                return (false, AppText.Format("{0} kernel test failed: {1}", selectedKernel, FormatException(ex)));
+            }
+        }
+
         if (!Uri.TryCreate(target.BaseUrl?.Trim(), UriKind.Absolute, out var baseUri)
             || (baseUri.Scheme != Uri.UriSchemeHttps && baseUri.Scheme != Uri.UriSchemeHttp))
         {
@@ -243,6 +306,8 @@ public sealed partial class AiAnalysisService
 
         _diagnosticLogService.Write(
             $"AI request prepared: route={GetCurrentRouteName(routes, routeState)}, systemChars={systemPrompt.Length}, userChars={eventSummary.Length}, estimatedInputTokens={estimatedInputTokens}, truncatedDescriptions={truncatedDescriptionCount}, omittedEvents={omittedEventCount}");
+        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Prepared {0:N0} input tokens", estimatedInputTokens)
+        { EstimatedInputTokens = estimatedInputTokens });
         var response = await SendAnalysisRequestAsync(
             routes,
             systemPrompt,
@@ -344,6 +409,24 @@ public sealed partial class AiAnalysisService
         IProgress<AuditProgressEventArgs>? progress,
         CancellationToken cancellationToken)
     {
+        string selectedKernel = AiKernelCatalog.Normalize(_settingsService.Current.AiKernel);
+        if (selectedKernel != AiKernelCatalog.Http)
+        {
+            return await RetryAsync(
+                $"{selectedKernel} kernel, model={target.Model}",
+                () => SendKernelRequestToTargetAsync(
+                    selectedKernel,
+                    target,
+                    systemPrompt,
+                    userPrompt,
+                    progress,
+                    cancellationToken),
+                cancellationToken,
+                maxRetries,
+                progress,
+                target.Name);
+        }
+
         if (!Uri.TryCreate(target.BaseUrl?.Trim(), UriKind.Absolute, out var baseUri)
             || (baseUri.Scheme != Uri.UriSchemeHttps && baseUri.Scheme != Uri.UriSchemeHttp))
         {
@@ -478,6 +561,266 @@ public sealed partial class AiAnalysisService
                 throw;
             }
         }, cancellationToken, maxRetries, progress, target.Name);
+    }
+
+    private async Task<AnalysisResponsePayload> SendKernelRequestToTargetAsync(
+        string kernel,
+        AiTargetSettings target,
+        string systemPrompt,
+        string userPrompt,
+        IProgress<AuditProgressEventArgs>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (_kernelManagerService == null)
+        {
+            throw new InvalidOperationException(AppText.Get("The selected AI kernel is unavailable in this build."));
+        }
+
+        string executable = _kernelManagerService.RequireExecutable(kernel);
+        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Connecting to {0} kernel", kernel));
+        _diagnosticLogService.Write($"AI kernel dispatching: kernel={kernel}, route={target.Name}, model={target.Model}");
+
+        string temporaryRoot = Path.Combine(Path.GetTempPath(), $"lsa-kernel-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temporaryRoot);
+        string outputPath = Path.Combine(temporaryRoot, "last-message.txt");
+        string userPromptPath = Path.Combine(temporaryRoot, "user-prompt.txt");
+        string codexHome = Path.Combine(temporaryRoot, "codex-home");
+        string piHome = Path.Combine(temporaryRoot, "pi-home");
+        try
+        {
+            File.WriteAllText(userPromptPath, userPrompt, new UTF8Encoding(false));
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executable,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = temporaryRoot
+            };
+            ConfigureKernelProcess(startInfo, kernel, target, systemPrompt, userPromptPath, outputPath, codexHome, piHome);
+
+            using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            if (!process.Start())
+            {
+                throw new InvalidOperationException(AppText.Get("The selected AI kernel could not be started."));
+            }
+
+            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+            if (kernel == AiKernelCatalog.Codex)
+            {
+                string kernelPrompt = systemPrompt + "\n\nUser event data and task:\n" + userPrompt;
+                await process.StandardInput.WriteAsync(kernelPrompt.AsMemory(), cancellationToken);
+                await process.StandardInput.WriteLineAsync();
+                process.StandardInput.Close();
+            }
+            else
+            {
+                process.StandardInput.Close();
+            }
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+                throw;
+            }
+
+            string stdout = await stdoutTask;
+            string stderr = await stderrTask;
+            string output = ExtractKernelOutput(kernel, outputPath, stdout);
+            if (process.ExitCode != 0)
+            {
+                string detail = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+                throw new AiResponseException(
+                    $"The {kernel} kernel exited with code {process.ExitCode}: {TruncateText(detail.Trim(), 600)}",
+                    allowFailover: true);
+            }
+
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                throw new AiResponseException($"The {kernel} kernel returned no analysis text.", allowFailover: true);
+            }
+
+            progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Validating {0} response", kernel));
+            return new AnalysisResponsePayload(output, false, 0, 200, "OK", "responses") with { Model = target.Model };
+        }
+        catch (Exception ex)
+        {
+            _diagnosticLogService.WriteException($"AI kernel request failed: kernel={kernel}, route={target.Name}", ex);
+            throw;
+        }
+        finally
+        {
+            try { if (Directory.Exists(temporaryRoot)) Directory.Delete(temporaryRoot, true); } catch { }
+        }
+    }
+
+    private static void ConfigureKernelProcess(
+        ProcessStartInfo startInfo,
+        string kernel,
+        AiTargetSettings target,
+        string systemPrompt,
+        string userPromptPath,
+        string outputPath,
+        string codexHome,
+        string piHome)
+    {
+        if (kernel == AiKernelCatalog.Codex)
+        {
+            Directory.CreateDirectory(codexHome);
+            string baseUrl = target.BaseUrl.TrimEnd('/');
+            if (!baseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            {
+                baseUrl += "/v1";
+            }
+            string wireApi = string.Equals(target.Mode, "chat", StringComparison.OrdinalIgnoreCase) ? "chat" : "responses";
+            string config = $"model = {TomlString(target.Model)}\nmodel_provider = \"localsecurityaudit\"\n\n[model_providers.localsecurityaudit]\nname = \"LocalSecurityAudit\"\nbase_url = {TomlString(baseUrl)}\nwire_api = {TomlString(wireApi)}\nenv_key = \"LOCAL_SECURITY_AUDIT_API_KEY\"\n";
+            File.WriteAllText(Path.Combine(codexHome, "config.toml"), config, new UTF8Encoding(false));
+            startInfo.Environment["CODEX_HOME"] = codexHome;
+            if (!string.IsNullOrWhiteSpace(target.ApiKey))
+            {
+                startInfo.Environment["LOCAL_SECURITY_AUDIT_API_KEY"] = target.ApiKey.Trim();
+            }
+
+            startInfo.ArgumentList.Add("exec");
+            startInfo.ArgumentList.Add("--json");
+            startInfo.ArgumentList.Add("--ephemeral");
+            startInfo.ArgumentList.Add("--sandbox");
+            startInfo.ArgumentList.Add("read-only");
+            startInfo.ArgumentList.Add("--skip-git-repo-check");
+            startInfo.ArgumentList.Add("--color");
+            startInfo.ArgumentList.Add("never");
+            startInfo.ArgumentList.Add("--output-last-message");
+            startInfo.ArgumentList.Add(outputPath);
+            startInfo.ArgumentList.Add("-");
+            return;
+        }
+
+        Directory.CreateDirectory(piHome);
+        string piBaseUrl = target.BaseUrl.TrimEnd('/');
+        if (!piBaseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)) piBaseUrl += "/v1";
+        // Never reuse the user's encrypted Pi auth/session files. An isolated
+        // directory also prevents stale host credentials from affecting retries.
+        startInfo.Environment["PI_CODING_AGENT_DIR"] = piHome;
+        startInfo.Environment["PI_CODING_AGENT_SESSION_DIR"] = piHome;
+        startInfo.Environment["PI_OFFLINE"] = "1";
+        startInfo.Environment["PI_SKIP_VERSION_CHECK"] = "1";
+        startInfo.Environment["PI_TELEMETRY"] = "0";
+        startInfo.Environment["OPENAI_API_KEY"] = target.ApiKey?.Trim() ?? string.Empty;
+        startInfo.Environment["OPENAI_BASE_URL"] = piBaseUrl;
+        var piConfig = new
+        {
+            providers = new Dictionary<string, object>
+            {
+                ["localsecurityaudit"] = new
+                {
+                    baseUrl = piBaseUrl,
+                    api = string.Equals(target.Mode, "chat", StringComparison.OrdinalIgnoreCase)
+                        ? "openai-completions" : "openai-responses",
+                    apiKey = "$OPENAI_API_KEY",
+                    models = new[]
+                    {
+                        new
+                        {
+                            id = target.Model,
+                            name = target.Model,
+                            reasoning = false,
+                            input = new[] { "text" },
+                            contextWindow = 256000,
+                            maxTokens = 8000
+                        }
+                    }
+                }
+            }
+        };
+        File.WriteAllText(Path.Combine(piHome, "models.json"), JsonSerializer.Serialize(piConfig), new UTF8Encoding(false));
+        startInfo.ArgumentList.Add("--mode");
+        startInfo.ArgumentList.Add("json");
+        startInfo.ArgumentList.Add("--print");
+        startInfo.ArgumentList.Add("--no-session");
+        startInfo.ArgumentList.Add("--no-tools");
+        startInfo.ArgumentList.Add("--no-context-files");
+        startInfo.ArgumentList.Add("--provider");
+        startInfo.ArgumentList.Add("localsecurityaudit");
+        startInfo.ArgumentList.Add("--model");
+        startInfo.ArgumentList.Add(target.Model);
+        startInfo.ArgumentList.Add("--thinking");
+        startInfo.ArgumentList.Add("off");
+        startInfo.ArgumentList.Add("--system-prompt");
+        startInfo.ArgumentList.Add(systemPrompt);
+        startInfo.ArgumentList.Add("--");
+        startInfo.ArgumentList.Add("@" + userPromptPath);
+    }
+
+    private static string TomlString(string value) => "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+
+    private static string ExtractKernelOutput(string kernel, string outputPath, string stdout)
+    {
+        if (kernel == AiKernelCatalog.Codex && File.Exists(outputPath))
+        {
+            string lastMessage = File.ReadAllText(outputPath).Trim();
+            if (!string.IsNullOrWhiteSpace(lastMessage))
+            {
+                return lastMessage;
+            }
+        }
+
+        string direct = stdout.Trim();
+        if (direct.Contains("\"issues\"", StringComparison.OrdinalIgnoreCase))
+        {
+            return direct;
+        }
+
+        var candidates = new List<string>();
+        foreach (string line in stdout.Split('\n'))
+        {
+            string trimmed = line.Trim();
+            if (!trimmed.StartsWith("{", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(trimmed);
+                CollectKernelText(document.RootElement, candidates);
+            }
+            catch (JsonException)
+            {
+                // A diagnostic JSONL line does not make the whole kernel response unusable.
+            }
+        }
+
+        return candidates.LastOrDefault(candidate => candidate.Contains("issues", StringComparison.OrdinalIgnoreCase))
+            ?? candidates.LastOrDefault()
+            ?? string.Empty;
+    }
+
+    private static void CollectKernelText(JsonElement element, List<string> candidates)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.String
+                    && property.Name is "text" or "output_text" or "content")
+                {
+                    string value = property.Value.GetString() ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(value)) candidates.Add(value);
+                }
+
+                CollectKernelText(property.Value, candidates);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in element.EnumerateArray()) CollectKernelText(child, candidates);
+        }
     }
 
     private static async Task<AnalysisResponsePayload> ReadAnalysisResponseAsync(
@@ -1397,7 +1740,10 @@ public sealed partial class AiAnalysisService
                     inputTokenBudget,
                     routeState,
                     new AuditProgressReporter(value => progress?.Report(new(value.Stage, value.State, value.MessageKey, value.Arguments)
-                    { BatchNumber = value.Stage == AuditStage.Analyze ? index + 1 : 0 })),
+                    {
+                        BatchNumber = value.Stage == AuditStage.Analyze ? index + 1 : 0,
+                        EstimatedInputTokens = value.EstimatedInputTokens
+                    })),
                     batchCts.Token);
                 var issues = RemapIssuesToIndexes(
                     localIssues,

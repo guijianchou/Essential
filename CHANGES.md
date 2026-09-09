@@ -1,5 +1,10 @@
 # 项目修改记录
 
+## 0.3.8 / 2026-09-09
+
+- 删除 Assets 中旧的无主题 logo 文件，发布资源统一使用 light/dark 命名的 logo。
+- Debug 和 Release 输出按 `LocalSecurityAudit-0.3.8` 版本目录隔离，避免不同版本混用；脚本和文档同步到新路径。
+
 ## 0.3.7 / 2026-09-08
 
 - 重排左侧工作流：扫描状态和进度在概览、趋势之后居中显示，长详情独立滚动，不再遮挡趋势；底部收起操作保留为纯图标。
@@ -238,8 +243,8 @@ public async Task ExecuteAuditAsync(bool fastScan = true)
 - ⚠️ 1 个警告 (NETSDK1206 - 信息性，不影响功能)
 
 ### 输出位置
-- Debug: `bin\x64\Debug\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe`
-- Release: `bin\x64\Release\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe`
+- Debug: `bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe`
+- Release: `bin\x64\Release\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe`
 
 ---
 
@@ -257,10 +262,10 @@ public async Task ExecuteAuditAsync(bool fastScan = true)
 ### 运行命令
 ```powershell
 # Release 版本（推荐）
-Start-Process "bin\x64\Release\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe" -Verb RunAs
+Start-Process "bin\x64\Release\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe" -Verb RunAs
 
 # Debug 版本
-Start-Process "bin\x64\Debug\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe" -Verb RunAs
+Start-Process "bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe" -Verb RunAs
 ```
 
 ### 使用说明
