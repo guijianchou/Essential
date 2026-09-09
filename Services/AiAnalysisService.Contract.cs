@@ -48,6 +48,12 @@ public sealed partial class AiAnalysisService
         prompt.AppendLine("severity, confidence, category, affected, rootCause, recommendation, occurrences,");
         prompt.AppendLine("relatedEventRefs, titleZh, descriptionZh, rootCauseZh, recommendationZh.");
         prompt.AppendLine("- severity and confidence: \"High\", \"Medium\" or \"Low\".");
+        prompt.AppendLine("- Match analysis depth to severity. For High findings, describe the chronological evidence chain");
+        prompt.AppendLine("  using all relevant event fields and refs, separate observed facts from possible causes,");
+        prompt.AppendLine("  and give an ordered, safe immediate action plus a concrete verification step. For Medium");
+        prompt.AppendLine("  findings, explain the observed pattern and likely alternatives, then give specific checks");
+        prompt.AppendLine("  that can confirm or clear it. For Low findings, keep the explanation concise and provide");
+        prompt.AppendLine("  the single most useful routine check. Never invent a cause, source or remediation result.");
         prompt.AppendLine("- category: \"Login\", \"Privilege\", \"Firewall\", \"System\", \"Application\", \"Network\",");
         prompt.AppendLine("  \"Encryption\", \"Policy\", \"Audit\" or \"Other\", chosen by event ID, log name and provider.");
         prompt.AppendLine("- eventRef, eventId and eventTimestamp are copied from the supplied event; eventTimestamp is ISO-8601 UTC.");
@@ -460,6 +466,9 @@ public sealed partial class AiAnalysisService
                 {
                     issue.FirstSeenUtc = relatedEvents.Min(evt => evt.Timestamp).ToUniversalTime();
                     issue.LastSeenUtc = relatedEvents.Max(evt => evt.Timestamp).ToUniversalTime();
+                    issue.EventTimes = relatedEvents
+                        .GroupBy(evt => $"{evt.LogName}:{evt.EventRecordId?.ToString(CultureInfo.InvariantCulture) ?? evt.Timestamp.ToUniversalTime().ToString("O")}")
+                        .ToDictionary(group => group.Key, group => group.First().Timestamp.ToUniversalTime());
                 }
             }
 
@@ -496,11 +505,11 @@ public sealed partial class AiAnalysisService
             string? mergeKey = null;
             if (!string.IsNullOrWhiteSpace(issue.Key))
             {
-                mergeKey = $"{issue.LogName}|{issue.Source}|{issue.Category}|key|{issue.Key}";
+                mergeKey = JsonSerializer.Serialize(new[] { issue.LogName, issue.Source, issue.Category, "key", issue.Key, issue.Affected });
             }
             else if (!string.IsNullOrWhiteSpace(issue.Title))
             {
-                mergeKey = $"{issue.LogName}|{issue.Source}|{issue.Category}|{issue.EventId}|{issue.Title.ToLowerInvariant()}";
+                mergeKey = JsonSerializer.Serialize(new[] { issue.LogName, issue.Source, issue.Category, issue.EventId, issue.Title.ToLowerInvariant(), issue.Affected });
             }
 
             if (mergeKey != null && byKey.TryGetValue(mergeKey, out var existing))
@@ -563,6 +572,7 @@ public sealed partial class AiAnalysisService
                 }
 
                 existing.SupportingEventCount = existing.RelatedEventRefs.Count;
+                foreach (var occurrence in issue.EventTimes) existing.EventTimes[occurrence.Key] = occurrence.Value;
                 if (issue.FirstSeenUtc != default
                     && (existing.FirstSeenUtc == default || issue.FirstSeenUtc < existing.FirstSeenUtc))
                 {

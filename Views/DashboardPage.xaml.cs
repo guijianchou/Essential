@@ -111,6 +111,15 @@ public sealed partial class DashboardPage : Page
         }
     }
 
+    private void OnActivityRangeClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton { Tag: string range } button)
+        {
+            ViewModel.SetActivityRangeCommand.Execute(range);
+            button.IsChecked = true;
+        }
+    }
+
     private void OnSourceFilterClick(object sender, RoutedEventArgs e)
     {
         if (sender is ToggleButton button && button.Tag is string log)

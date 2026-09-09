@@ -58,6 +58,7 @@ public class AuditIssueEnhanced
     public DateTime FirstSeenUtc { get; set; }
     public DateTime LastSeenUtc { get; set; }
     public int SupportingEventCount { get; set; }
+    public Dictionary<string, DateTime> EventTimes { get; set; } = new();
     public string Affected { get; set; } = string.Empty;
     public string RootCause { get; set; } = string.Empty;
     public string Recommendation { get; set; } = string.Empty;

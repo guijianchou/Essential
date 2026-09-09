@@ -1,7 +1,7 @@
 """Validate external audits and append them to the assistant database. Standard library only.
 
 Never collects logs, starts an agent, calls an AI endpoint, or writes the extended database.
-See the bundled AGENTS.md for the version 1 input and storage contract.
+See the bundled AGENTS.md for the input contract (v2; v1 remains readable).
 """
 
 import argparse
@@ -19,7 +19,8 @@ import sys
 from uuid import UUID
 
 
-LOGS = {"Security", "System", "Application", "Setup"}
+LEGACY_LOGS = {"Security", "System", "Application", "Setup"}
+LOGS = LEGACY_LOGS | {"ForwardedEvents"}
 SEVERITIES = {"High", "Medium", "Low"}
 CATEGORIES = {"Login", "Privilege", "Firewall", "Network", "System", "Application",
               "Encryption", "Policy", "Audit", "Other"}
@@ -29,6 +30,7 @@ EVIDENCE_LIMITS = {"EventRef": 128, "EventId": 10, "EventTimestamp": 40, "Source
                    "LogName": 32, "EventRecordId": 32, "EventDescription": 4096,
                    "EventAdditionalData": 8192, "UserName": 256, "IpAddress": 128}
 ASSISTANT_APPLICATION_ID = 0x4C534141
+MODELS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
 SECRET_PATTERN = re.compile(
     r"-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----|\bsk-[A-Za-z0-9_-]{20,}"
     r"|\b(?:Bearer|Basic)\s+[A-Za-z0-9_+/=-]{16,}"
@@ -108,7 +110,9 @@ def refs(value, available, label, allow_empty=False):
 def prepare_result(result, evidence, evidence_hash):
     fields(evidence, {"SchemaVersion", "RunId", "ScanStart", "ScanEnd", "CollectedAt",
                       "DurationMs", "Channels", "Events"}, label="Evidence")
-    require(type(evidence["SchemaVersion"]) is int and evidence["SchemaVersion"] == 1, "Unsupported evidence schema.")
+    require(type(evidence["SchemaVersion"]) is int and evidence["SchemaVersion"] in (1, 2), "Unsupported evidence schema.")
+    schema = evidence["SchemaVersion"]
+    expected_logs = LOGS if schema == 2 else LEGACY_LOGS
     try:
         require(str(UUID(evidence["RunId"])) == evidence["RunId"], "RunId must be a canonical UUID.")
     except (ValueError, TypeError, AttributeError):
@@ -118,22 +122,24 @@ def prepare_result(result, evidence, evidence_hash):
     require(timedelta(0) < end - start <= timedelta(hours=24), "Collection windows must be positive and at most 24 hours.")
     require(end <= collected <= datetime.now(timezone.utc) + timedelta(minutes=5), "Collection times are inconsistent or in the future.")
     collection_ms = integer(evidence["DurationMs"], 0, 86_400_000, "DurationMs")
-    require(type(evidence["Channels"]) is list and len(evidence["Channels"]) == 4, "Evidence must describe all four channels.")
+    require(type(evidence["Channels"]) is list and len(evidence["Channels"]) == len(expected_logs), "Evidence must describe every channel for its schema.")
     channels = {}
     for channel in evidence["Channels"]:
         fields(channel, {"LogName", "Status", "EventCount", "Reason"}, label="Channel")
         name = text(channel["LogName"], 32, "Channel.LogName")
-        require(name in LOGS and name not in channels, "Channel names must be known and unique.")
-        require(channel["Status"] in ("complete", "unavailable", "truncated"), "Unknown channel status.")
-        require(channel["Reason"] in ("none", "access_denied", "not_found", "query_failed", "limit"), "Unknown channel reason.")
+        require(name in expected_logs and name not in channels, "Channel names must be known and unique.")
+        require(channel["Status"] in ("complete", "unavailable", "truncated", "skipped"), "Unknown channel status.")
+        require(channel["Reason"] in ("none", "access_denied", "not_found", "query_failed", "limit", "not_requested"), "Unknown channel reason.")
         integer(channel["EventCount"], 0, 5000, "Channel.EventCount")
         require((channel["Status"] == "complete" and channel["Reason"] == "none")
                 or (channel["Status"] == "truncated" and channel["Reason"] == "limit" and channel["EventCount"] > 0)
+                or (schema == 2 and name == "Security" and channel["Status"] == "skipped"
+                    and channel["Reason"] == "not_requested" and channel["EventCount"] == 0)
                 or (channel["Status"] == "unavailable" and channel["Reason"] in ("access_denied", "not_found", "query_failed")
                     and channel["EventCount"] == 0), "Channel status, reason and count disagree.")
         channels[name] = channel
 
-    require(type(evidence["Events"]) is list and len(evidence["Events"]) <= 20_000, "Events must be a bounded array.")
+    require(type(evidence["Events"]) is list and len(evidence["Events"]) <= len(expected_logs) * 5000, "Events must be a bounded array.")
     events = {}
     counts = Counter()
     for event in evidence["Events"]:
@@ -155,14 +161,18 @@ def prepare_result(result, evidence, evidence_hash):
     finished = utc(result["Timestamp"], "Timestamp")
     require(collected <= finished <= datetime.now(timezone.utc) + timedelta(minutes=5), "Result completion time is inconsistent or in the future.")
     metadata = result["Metadata"]
-    fields(metadata, {"SchemaVersion", "Mode", "RunId", "Producer", "AnalysisModel", "ScanType", "AnalyzedEventRefs", "FilterSummary"}, label="Metadata")
-    require(type(metadata["SchemaVersion"]) is int and metadata["SchemaVersion"] == 1 and metadata["Mode"] == "assistant", "Only assistant schema version 1 is accepted.")
+    fields(metadata, {"SchemaVersion", "Mode", "RunId", "Producer", "AnalysisModel", "ScanType", "AnalyzedEventRefs", "FilterSummary"},
+           {"BaselineStart", "BaselineEnd"}, label="Metadata")
+    require(type(metadata["SchemaVersion"]) is int and metadata["SchemaVersion"] == schema and metadata["Mode"] == "assistant", "Assistant metadata must match the evidence schema version.")
     require(metadata["RunId"] == evidence["RunId"], "The result and evidence RunId do not match.")
     require(metadata["Producer"] in ("claude", "codex"), "Producer must be claude or codex.")
     text(metadata["AnalysisModel"], 128, "AnalysisModel")
     require(metadata["ScanType"] in ("Fast Scan", "Full Scan"), "Unknown ScanType.")
-    if metadata["ScanType"] == "Full Scan":
-        require(end - start == timedelta(hours=24), "A Full Scan must cover exactly 24 hours.")
+    if "BaselineStart" in metadata or "BaselineEnd" in metadata:
+        require("BaselineStart" in metadata and "BaselineEnd" in metadata, "Both baseline boundaries are required.")
+        baseline_start, baseline_end = utc(metadata["BaselineStart"], "BaselineStart"), utc(metadata["BaselineEnd"], "BaselineEnd")
+        require(baseline_start <= start < end <= baseline_end and timedelta(0) < baseline_end - baseline_start <= timedelta(days=7),
+                "The batch must be inside a baseline of at most seven days.")
     analyzed = refs(metadata["AnalyzedEventRefs"], events.keys(), "AnalyzedEventRefs", allow_empty=True)
     text(metadata["FilterSummary"], 640, "FilterSummary", empty=len(analyzed) == len(events))
     require(type(result["Findings"]) is list and len(result["Findings"]) <= 500, "Findings must be an array of at most 500 items.")
@@ -187,6 +197,7 @@ def prepare_result(result, evidence, evidence_hash):
         times = sorted((events[ref]["EventTimestamp"] for ref in related), key=lambda value: utc(value, "EventTimestamp"))
         findings.append({**finding, **primary, "RelatedEventRefs": sorted(related),
                          "FirstSeenUtc": times[0], "LastSeenUtc": times[-1], "SupportingEventCount": len(related),
+                         "EventTimes": {ref: events[ref]["EventTimestamp"] for ref in sorted(related)},
                          "Occurrences": len(related), "DetectedAt": result["Timestamp"],
                          "AnalysisModel": metadata["AnalysisModel"], "OriginalAnalysisModel": "", "OptimizedAtUtc": None})
 
@@ -197,12 +208,14 @@ def prepare_result(result, evidence, evidence_hash):
     if "HealthScore" in result:
         require(type(result["HealthScore"]) is int and result["HealthScore"] == score, "HealthScore does not match the application's scoring rule.")
     incomplete = [channel for channel in evidence["Channels"] if channel["Status"] != "complete"]
+    coverage = "partial" if any(channel["Status"] != "skipped" for channel in incomplete) else "limited" if incomplete else "complete"
     normalized_metadata = {**metadata, "AnalyzedEventRefs": sorted(analyzed), "EvidenceSha256": evidence_hash,
+                           "AnalysisModels": [metadata["AnalysisModel"]] if analyzed else [], "AnalysisCompleted": True, "MergeVersion": 1,
                            "ScanStart": evidence["ScanStart"], "ScanEnd": evidence["ScanEnd"],
                            "EventCount": len(events), "AnalyzedEventCount": len(analyzed), "FilteredEventCount": len(events) - len(analyzed),
                            "DurationMs": collection_ms + int((finished - collected).total_seconds() * 1000),
                            "TimeRange": f"{start:%Y-%m-%d %H:%M} - {end:%Y-%m-%d %H:%M}",
-                           "Channels": evidence["Channels"], "CoverageStatus": "partial" if incomplete else "complete",
+                           "Channels": evidence["Channels"], "CoverageStatus": coverage,
                            "CoverageNotes": "; ".join(f"{item['LogName']}: {item['Status']} ({item['Reason']})" for item in incomplete)}
     return {"Timestamp": result["Timestamp"], "HealthScore": score, "Findings": findings, "Metadata": normalized_metadata}
 
@@ -238,8 +251,17 @@ def publish(result, path):
             existing = connection.execute("SELECT Id, Timestamp, HealthScore, FindingsJson, MetadataJson FROM AuditResults WHERE json_extract(MetadataJson, '$.RunId') = ?", (result["Metadata"]["RunId"],)).fetchone()
             timestamp = utc(result["Timestamp"], "Timestamp").strftime("%Y-%m-%d %H:%M:%S.%f")
             if existing:
+                previous_findings, previous_meta = json.loads(existing[3]), json.loads(existing[4])
+                comparison_findings = [dict(finding) for finding in result["Findings"]]
+                for old, new in zip(previous_findings, comparison_findings):
+                    if "EventTimes" not in old:
+                        new.pop("EventTimes", None)
+                comparison_meta = dict(result["Metadata"])
+                for name in ("AnalysisModels", "AnalysisCompleted", "MergeVersion"):
+                    if name not in previous_meta:
+                        comparison_meta.pop(name, None)
                 require(existing[1] == timestamp and existing[2] == result["HealthScore"]
-                        and json.loads(existing[3]) == result["Findings"] and json.loads(existing[4]) == result["Metadata"],
+                        and previous_findings == comparison_findings and previous_meta == comparison_meta,
                         "RunId already exists with different content. Stored results were not overwritten.")
                 row_id, added = existing[0], False
             else:
@@ -256,27 +278,93 @@ def publish(result, path):
     return {"Database": str(path), "RowId": row_id, "Added": added}
 
 
-def status(path):
-    summary = {"Database": str(path), "RecordCount": 0, "LatestPublishedAt": None, "LastCompleteScanEnd": None}
-    if not path.exists():
-        return summary
-    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5)) as connection:
-        summary["RecordCount"] = connection.execute("SELECT count(*) FROM AuditResults").fetchone()[0]
-        for timestamp, raw in connection.execute("SELECT Timestamp, MetadataJson FROM AuditResults ORDER BY Timestamp DESC, Id DESC"):
-            try:
-                meta = json.loads(raw)
-                if not isinstance(meta, dict) or meta.get("Mode") != "assistant" or meta.get("SchemaVersion") != 1:
-                    continue
-                end = utc(meta["ScanEnd"], "ScanEnd")
-                if end > datetime.now(timezone.utc):
-                    continue
-                if summary["LatestPublishedAt"] is None:
-                    summary["LatestPublishedAt"] = timestamp
-                if meta.get("CoverageStatus") == "complete" and (summary["LastCompleteScanEnd"] is None
-                        or end > utc(summary["LastCompleteScanEnd"], "ScanEnd")):
-                    summary["LastCompleteScanEnd"] = meta["ScanEnd"]
-            except (TypeError, ValueError, KeyError):
+def model_rank(meta):
+    models = meta.get("AnalysisModels", [meta.get("AnalysisModel")])
+    return min((MODELS.index(model) if model in MODELS else -1 for model in models), default=-1)
+
+
+def eligible(meta, full):
+    if meta.get("CoverageStatus") not in ("complete", "limited"):
+        return False
+    expected = LOGS if full else LOGS - {"Security"}
+    channels = meta.get("Channels", [])
+    return all(sum(channel.get("LogName") == log and channel.get("Status") == "complete"
+                   and channel.get("Reason") == "none" for channel in channels) == 1 for log in expected)
+
+
+def checkpoint(records, full):
+    usable = [meta for meta in records if eligible(meta, full)]
+    cursor, rank = None, -1
+    for meta in usable:
+        end = utc(meta["ScanEnd"], "ScanEnd")
+        baseline_start, baseline_end = meta.get("BaselineStart"), meta.get("BaselineEnd")
+        if baseline_start:
+            covered = utc(baseline_start, "BaselineStart")
+            ranked = covered
+            target = utc(baseline_end, "BaselineEnd")
+            parts = sorted((part for part in usable if part.get("BaselineStart") == baseline_start
+                            and part.get("BaselineEnd") == baseline_end), key=lambda part: utc(part["ScanStart"], "ScanStart"))
+            for part in parts:
+                start, stop = utc(part["ScanStart"], "ScanStart"), utc(part["ScanEnd"], "ScanEnd")
+                if start <= covered < stop:
+                    covered = stop
+                if (model_rank(part) >= model_rank(meta) or part.get("EventCount") == 0) and start <= ranked < stop:
+                    ranked = stop
+            if covered > utc(baseline_start, "BaselineStart"):
+                cursor = max(cursor, covered) if cursor else covered
+            if ranked < target:
                 continue
+        else:
+            cursor = max(cursor, end) if cursor else end
+        rank = max(rank, model_rank(meta))
+    return cursor, rank
+
+
+def status(path, model=None, include_security=False, now=None):
+    now = now or datetime.now(timezone.utc)
+    summary = {"Database": str(path), "RecordCount": 0, "LatestPublishedAt": None, "LastCompleteScanEnd": None, "LastStandardScanEnd": None}
+    records, retained = [], []
+    for database in (path, path.parent.parent / "audit_data.db"):
+        if not database.exists():
+            continue
+        require(database.resolve() == database, "A history database path must not redirect through a link or junction.")
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=5)) as connection:
+            for timestamp, raw in connection.execute("SELECT Timestamp, MetadataJson FROM AuditResults ORDER BY Timestamp DESC, Id DESC"):
+                try:
+                    meta = json.loads(raw)
+                    if not isinstance(meta, dict) or meta.get("Mode") not in ("assistant", "extended", "full"):
+                        continue
+                    start, end = utc(meta["ScanStart"], "ScanStart"), utc(meta["ScanEnd"], "ScanEnd")
+                    if start >= end or end > now:
+                        continue
+                    records.append(meta)
+                    summary["RecordCount"] += 1
+                    if summary["LatestPublishedAt"] is None or timestamp > summary["LatestPublishedAt"]:
+                        summary["LatestPublishedAt"] = timestamp
+                except (TypeError, ValueError, KeyError):
+                    continue
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='ScanCheckpoints'").fetchone():
+                retained.extend(connection.execute("SELECT Scope, ModelRank, ScanEnd FROM ScanCheckpoints"))
+    checkpoints = {}
+    for full, key in ((False, "LastStandardScanEnd"), (True, "LastCompleteScanEnd")):
+        cursor, rank = checkpoint(records, full)
+        for scope, stored_rank, raw_end in retained:
+            if scope != ("full" if full else "standard"):
+                continue
+            end = datetime.fromisoformat(raw_end).replace(tzinfo=timezone.utc)
+            if end <= now:
+                cursor = max(cursor, end) if cursor else end
+                rank = max(rank, stored_rank)
+        summary[key] = cursor.isoformat().replace("+00:00", "Z") if cursor else None
+        checkpoints[full] = (cursor, rank)
+    cursor, rank = checkpoints[include_security]
+    summary["BestAnalysisModel"] = MODELS[rank] if 0 <= rank < len(MODELS) else None
+    if model is not None:
+        requested_rank = MODELS.index(model) if model in MODELS else -1
+        upgrade = rank >= 0 and requested_rank > rank
+        start = min(cursor, now - timedelta(days=7)) if cursor and upgrade else cursor or now - timedelta(days=7)
+        summary.update(ScanReason="model_upgrade" if upgrade else "incremental" if cursor else "initial",
+                       SuggestedScanStart=start.isoformat().replace("+00:00", "Z"), SuggestedScanEnd=now.isoformat().replace("+00:00", "Z"))
     return summary
 
 
@@ -286,11 +374,13 @@ def main(argv=None):
     parser.add_argument("result", nargs="?")
     parser.add_argument("--evidence")
     parser.add_argument("--data-root", help="Directory containing assistant/audit_data.db, as shown in the viewer. Never the database filename.")
+    parser.add_argument("--model", help="Actual analysis model; status returns a shared incremental or seven-day upgrade window.")
+    parser.add_argument("--include-security", action="store_true", help="Use full-scope progress for status. Does not collect or grant access.")
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
             require(args.result is None and args.evidence is None, "status does not accept input files.")
-            output = status(database_path(args.data_root))
+            output = status(database_path(args.data_root), args.model, args.include_security)
         else:
             require(bool(args.result and args.evidence), "validate and publish require a result file and --evidence.")
             result, _ = load_json(args.result, 8 * 1024 * 1024)

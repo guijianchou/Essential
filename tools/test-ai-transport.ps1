@@ -23,13 +23,23 @@ using System.Threading.Tasks;
 public sealed class TransportReply
 {
     public int Status = 200;
-    public string Body = "{\"output_text\":\"{\\\"issues\\\":[]}\"}";
+    public string ReasonPhrase = "Test";
+    public string Body = "{\"object\":\"response\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"issues\\\":[]}\"}]}]}";
+    public string Tail = "";
+    public int TailDelayMilliseconds;
+    public string RequestId = "req_0123456789abcdef0123456789abcdef";
     public string ContentType = "application/json";
     public bool HoldHeaders;
     public bool HoldOpen;
     public bool Disconnect;
     public int DelayMilliseconds;
     public int WaitForRequests;
+}
+
+public sealed class AnalysisModelCapture
+{
+    public string[] Models = Array.Empty<string>();
+    public Action<IReadOnlyList<string>> Callback => models => Models = models.ToArray();
 }
 
 public sealed class TransportProgress<T> : IProgress<T>
@@ -47,6 +57,7 @@ public sealed class TransportEndpoint : IDisposable
     private int requestCount;
     public int RequestCount => Volatile.Read(ref requestCount);
     public ConcurrentQueue<string> RequestBodies { get; } = new ConcurrentQueue<string>();
+    public ConcurrentQueue<string> RequestPaths { get; } = new ConcurrentQueue<string>();
     public TaskCompletionSource<bool> FirstRequest { get; } = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
     public string Url { get; }
 
@@ -83,7 +94,9 @@ public sealed class TransportEndpoint : IDisposable
                     header.Add(one[0]);
                     if (header.Count >= 4 && header.TakeLast(4).SequenceEqual(new byte[] {13, 10, 13, 10})) break;
                 }
-                string lengthLine = Encoding.ASCII.GetString(header.ToArray()).Split("\r\n")
+                string headerText = Encoding.ASCII.GetString(header.ToArray());
+                RequestPaths.Enqueue(headerText.Split("\r\n")[0].Split(' ')[1]);
+                string lengthLine = headerText.Split("\r\n")
                     .First(line => line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
                 int remaining = int.Parse(lengthLine.Split(':')[1]);
                 if (remaining > 1048576) throw new InvalidOperationException("Unexpected test request size.");
@@ -106,11 +119,14 @@ public sealed class TransportEndpoint : IDisposable
                 if (reply.HoldHeaders) await Task.Delay(Timeout.Infinite, stop.Token);
                 if (reply.DelayMilliseconds > 0) await Task.Delay(reply.DelayMilliseconds, stop.Token);
                 byte[] body = Encoding.UTF8.GetBytes(reply.Body);
-                string contentLength = reply.HoldOpen ? "" : "Content-Length: " + body.Length + "\r\n";
-                byte[] responseHeader = Encoding.ASCII.GetBytes("HTTP/1.1 " + reply.Status + " Test\r\nContent-Type: "
-                    + reply.ContentType + "\r\n" + contentLength + "Connection: close\r\n\r\n");
+                byte[] tail = Encoding.UTF8.GetBytes(reply.Tail);
+                string contentLength = reply.HoldOpen ? "" : "Content-Length: " + (body.Length + tail.Length) + "\r\n";
+                byte[] responseHeader = Encoding.ASCII.GetBytes("HTTP/1.1 " + reply.Status + " " + reply.ReasonPhrase + "\r\nContent-Type: "
+                    + reply.ContentType + "\r\nx-request-id: " + reply.RequestId + "\r\n" + contentLength + "Connection: close\r\n\r\n");
                 await stream.WriteAsync(responseHeader, stop.Token);
                 await stream.WriteAsync(body, stop.Token);
+                if (reply.TailDelayMilliseconds > 0) await Task.Delay(reply.TailDelayMilliseconds, stop.Token);
+                await stream.WriteAsync(tail, stop.Token);
                 if (reply.HoldOpen) await Task.Delay(Timeout.Infinite, stop.Token);
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
@@ -188,6 +204,132 @@ function Assert-TaskThrows($Task, [type]$ExceptionType) {
         throw
     }
     throw "Expected $($ExceptionType.Name)."
+}
+
+function New-ResponsesBody([string]$Text = '{"issues":[]}') {
+    return @{id='resp_0123456789abcdef0123456789abcdef'; object='response'; status='completed'; output=@(
+        @{type='message'; role='assistant'; status='completed'; content=@(@{type='output_text'; text=$Text})}
+    )} | ConvertTo-Json -Compress -Depth 8
+}
+
+function New-ResponsesCompleted([string]$Text = '{"issues":[]}') {
+    $response = New-ResponsesBody $Text | ConvertFrom-Json
+    $event = @{type='response.completed'; sequence_number=4; response=$response} | ConvertTo-Json -Compress -Depth 10
+    return "event: response.completed`r`ndata: $event`r`n`r`n"
+}
+
+Test-Case 'Responses requests separate instructions and input and use a standard v1 base URL' {
+    $endpoint = [TransportEndpoint]::new(@([TransportReply]::new()))
+    $timeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+    try {
+        $service = New-Analysis $endpoint
+        $settingsService = $service.GetType().GetField('_settingsService', $flags).GetValue($service)
+        $settingsService.Current.AiTargets[0].BaseUrl = $endpoint.Url + '/gateway/v1/'
+        $null = $service.AnalyzeEventsAsync((New-Events), $null, $timeout.Token).GetAwaiter().GetResult()
+        $request = @($endpoint.RequestBodies)[0] | ConvertFrom-Json
+        Assert-True (@($endpoint.RequestPaths)[0] -eq '/gateway/v1/responses') 'The endpoint lost its prefix or duplicated v1.'
+        Assert-True ($request.instructions.Contains('Synthetic test policy.')) 'Policy is not a separate instructions field.'
+        Assert-True ($request.input -is [string] -and $request.input.Contains('Synthetic unexpected restart.')) 'User event input is missing.'
+        Assert-True (-not $request.input.Contains('Synthetic test policy.')) 'System instructions were embedded in user input.'
+        Assert-True ($request.stream -eq $true -and $request.store -eq $false -and $request.max_output_tokens -eq 8000) 'Streaming, storage or output limit changed.'
+        Assert-True ($null -eq $request.messages -and $null -eq $request.max_tokens) 'Chat Completions fields leaked into Responses.'
+    }
+    finally { $timeout.Dispose(); $endpoint.Dispose() }
+}
+
+Test-Case 'Text done waits for delayed response.completed and uses the final response snapshot' {
+    $reply = [TransportReply]::new()
+    $reply.ContentType = 'text/event-stream'
+    $reply.Body = "data: {`"type`":`"response.output_text.done`",`"text`":`"{\`"issues\`":[]}`"}`n`n"
+    $reply.Tail = New-ResponsesCompleted
+    $reply.TailDelayMilliseconds = 300
+    $reply.HoldOpen = $true
+    $endpoint = [TransportEndpoint]::new(@($reply))
+    $timeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+    try {
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $result = (New-Analysis $endpoint).AnalyzeEventsAsync((New-Events), $null, $timeout.Token).GetAwaiter().GetResult()
+        Assert-True ($result.Item1.Count -eq 0 -and $timer.ElapsedMilliseconds -ge 250 -and $timer.Elapsed.TotalSeconds -lt 3) 'The client closed early or waited for socket close.'
+        Assert-True ($endpoint.RequestCount -eq 1) 'Successful SSE was retried.'
+    }
+    finally { $timeout.Dispose(); $endpoint.Dispose() }
+}
+
+Test-Case 'Text done followed by delayed incomplete is not saved as success or retried' {
+    $reply = [TransportReply]::new()
+    $reply.ContentType = 'text/event-stream'
+    $reply.Body = "data: {`"type`":`"response.output_text.done`",`"text`":`"{\`"issues\`":[]}`"}`n`n"
+    $reply.Tail = "data: {`"type`":`"response.incomplete`",`"response`":{`"status`":`"incomplete`",`"incomplete_details`":{`"reason`":`"max_output_tokens`"}}}`n`n"
+    $reply.TailDelayMilliseconds = 100
+    $main = [TransportEndpoint]::new(@($reply))
+    $fallback = [TransportEndpoint]::new(@([TransportReply]::new()))
+    $timeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+    try {
+        Assert-TaskThrows ((New-Analysis $main $fallback).AnalyzeEventsAsync((New-Events), $null, $timeout.Token)) ([Net.Http.HttpRequestException])
+        Assert-True ($main.RequestCount -eq 1 -and $fallback.RequestCount -eq 0) 'Incomplete response was retried or failed over.'
+    }
+    finally { $timeout.Dispose(); $main.Dispose(); $fallback.Dispose() }
+}
+
+Test-Case 'A Responses stream with valid JSON but no completion retries within the existing bound' {
+    $reply = [TransportReply]::new()
+    $reply.ContentType = 'text/event-stream'
+    $reply.Body = "data: {`"type`":`"response.output_text.delta`",`"delta`":`"{\`"issues\`":[]}`"}`n`n"
+    $endpoint = [TransportEndpoint]::new(@($reply))
+    $timeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+    try {
+        Assert-TaskThrows ((New-Analysis $endpoint).AnalyzeEventsAsync((New-Events), $null, $timeout.Token)) ([Net.Http.HttpRequestException])
+        Assert-True ($endpoint.RequestCount -eq 2) 'Unfinished response was accepted or retried without a bound.'
+    }
+    finally { $timeout.Dispose(); $endpoint.Dispose() }
+}
+
+Test-Case 'Standard HTTP errors retain a safe code but not provider message text' {
+    $reply = [TransportReply]::new()
+    $reply.Status = 400
+    $reply.ReasonPhrase = 'synthetic-private-reason'
+    $reply.Body = '{"error":{"code":"unsupported_value","type":"invalid_request_error","param":"reasoning.effort","message":"synthetic-private-value"}}'
+    $endpoint = [TransportEndpoint]::new(@($reply))
+    $timeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+    $testLogPath = Join-Path ([IO.Path]::GetTempPath()) ('lsa-responses-test-' + [guid]::NewGuid().ToString('N') + '.log')
+    try {
+        $service = New-Analysis $endpoint
+        $settingsService = $service.GetType().GetField('_settingsService', $flags).GetValue($service)
+        $settingsService.Current.DiagnosticLoggingEnabled = $true
+        $logger = $service.GetType().GetField('_diagnosticLogService', $flags).GetValue($service)
+        $logger.GetType().GetField('_logPath', $flags).SetValue($logger, $testLogPath)
+        $logger.GetType().GetField('_writeLock', $flags).SetValue($logger, [object]::new())
+        $failure = $null
+        try { $null = $service.AnalyzeEventsAsync((New-Events), $null, $timeout.Token).GetAwaiter().GetResult() }
+        catch { $failure = $_.Exception.ToString() }
+        Assert-True ($failure -and $failure.Contains('unsupported_value') -and -not $failure.Contains('synthetic-private-value')) 'Error diagnostics lost the code or leaked provider data.'
+        Assert-True (-not $failure.Contains('synthetic-private-reason')) 'An untrusted HTTP reason phrase leaked into the exception.'
+        $logText = Get-Content -LiteralPath $testLogPath -Raw
+        Assert-True ($logText.Contains($reply.RequestId) -and $logText.Contains('unsupported_value')) 'Safe request ID or error code was not logged.'
+        Assert-True (-not $logText.Contains('synthetic-private-value') -and -not $logText.Contains('Synthetic unexpected restart.')) 'Diagnostics leaked provider text or event data.'
+        Assert-True ($endpoint.RequestCount -eq 1) 'A permanent HTTP error was retried.'
+    }
+    finally {
+        $timeout.Dispose(); $endpoint.Dispose()
+        if (Test-Path -LiteralPath $testLogPath -PathType Leaf) { Remove-Item -LiteralPath $testLogPath }
+    }
+}
+
+Test-Case 'An unfinished HTTP error body cannot stall failover for the full analysis timeout' {
+    $reply = [TransportReply]::new()
+    $reply.Status = 502
+    $reply.Body = '{"error":'
+    $reply.HoldOpen = $true
+    $main = [TransportEndpoint]::new(@($reply))
+    $fallback = [TransportEndpoint]::new(@([TransportReply]::new()))
+    $timeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(9))
+    try {
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $result = (New-Analysis $main $fallback).AnalyzeEventsAsync((New-Events), $null, $timeout.Token).GetAwaiter().GetResult()
+        Assert-True ($result.Item1.Count -eq 0 -and $timer.Elapsed.TotalSeconds -lt 8) 'Error details blocked a known-failed route.'
+        Assert-True ($main.RequestCount -eq 1 -and $fallback.RequestCount -eq 1) 'Error-body timeout changed retry limits.'
+    }
+    finally { $timeout.Dispose(); $main.Dispose(); $fallback.Dispose() }
 }
 
 foreach ($mode in 'sse', 'json') {
@@ -313,7 +455,7 @@ function New-ReviewPayload([int]$Count = 1, [string]$Prefix = 'event-') {
 
 Test-Case 'Every supported model is sent as selected and labels generated findings' {
     $reply = [TransportReply]::new()
-    $reply.Body = @{output_text=(New-ReviewPayload)} | ConvertTo-Json -Compress
+    $reply.Body = New-ResponsesBody (New-ReviewPayload)
     $endpoint = [TransportEndpoint]::new(@($reply))
     $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(8))
     try {
@@ -333,7 +475,7 @@ Test-Case 'Findings record the actual fallback model when Main does not support 
     $notFound = [TransportReply]::new()
     $notFound.Status = 404
     $reply = [TransportReply]::new()
-    $reply.Body = @{output_text=(New-ReviewPayload)} | ConvertTo-Json -Compress
+    $reply.Body = New-ResponsesBody (New-ReviewPayload)
     $main = [TransportEndpoint]::new(@($notFound))
     $fallback = [TransportEndpoint]::new(@($reply))
     $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
@@ -349,7 +491,7 @@ Test-Case 'Optimization forces the selected model on fallback and blocks downwar
     $notFound = [TransportReply]::new()
     $notFound.Status = 404
     $reply = [TransportReply]::new()
-    $reply.Body = @{output_text=(New-ReviewPayload -Prefix 'optimize_')} | ConvertTo-Json -Compress
+    $reply.Body = New-ResponsesBody (New-ReviewPayload -Prefix 'optimize_')
     $main = [TransportEndpoint]::new(@($notFound))
     $fallback = [TransportEndpoint]::new(@($reply))
     $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
@@ -374,15 +516,18 @@ Test-Case 'Cancelling history optimization retains completed batches and a scan 
     $directory = Split-Path -Parent $assembly.Location
     $null = [Reflection.Assembly]::LoadFrom((Join-Path $directory 'Microsoft.Data.Sqlite.dll'))
     $null = [Reflection.Assembly]::LoadFrom((Join-Path $directory 'SQLitePCLRaw.batteries_v2.dll'))
-    $null = [Runtime.InteropServices.NativeLibrary]::Load((Join-Path $directory 'runtimes/win-x64/native/e_sqlite3.dll'))
+    $sqlitePath = Join-Path $directory 'e_sqlite3.dll'
+    if (-not (Test-Path -LiteralPath $sqlitePath)) { $sqlitePath = Join-Path $directory 'runtimes/win-x64/native/e_sqlite3.dll' }
+    $null = [Runtime.InteropServices.NativeLibrary]::Load($sqlitePath)
     [SQLitePCL.Batteries_V2]::Init()
     $reply = [TransportReply]::new()
-    $reply.Body = @{output_text=(New-ReviewPayload -Count 8 -Prefix 'optimize_')} | ConvertTo-Json -Compress
+    $reply.Body = New-ResponsesBody (New-ReviewPayload -Count 8 -Prefix 'optimize_')
     $hold = [TransportReply]::new()
     $hold.HoldHeaders = $true
     $endpoint = [TransportEndpoint]::new(@($reply, $hold))
     $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(8))
-    $connectionString = "Data Source=optimization-$([guid]::NewGuid());Mode=Memory;Cache=Shared;Pooling=False"
+    $database = Join-Path ([IO.Path]::GetTempPath()) "lsa-optimization-$([guid]::NewGuid()).db"
+    $connectionString = "Data Source=$database;Pooling=False"
     $keeper = [Microsoft.Data.Sqlite.SqliteConnection]::new($connectionString)
     $scheduler = $null
     try {
@@ -390,6 +535,7 @@ Test-Case 'Cancelling history optimization retains completed batches and a scan 
         $storageType = $assembly.GetType('LocalSecurityAudit.Services.DataStorageService', $true)
         $storage = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($storageType)
         $storageType.GetField('_connectionString', $flags).SetValue($storage, $connectionString)
+        $storageType.GetField('_historyPaths', $flags).SetValue($storage, [string[]]@($database, "$database.assistant"))
         $storageType.GetMethod('InitializeDatabaseAsync', $flags).Invoke($storage, @()).GetAwaiter().GetResult()
         $audit = [LocalSecurityAudit.Models.AuditResult]::new()
         $audit.Timestamp = [datetime]::UtcNow
@@ -418,8 +564,33 @@ Test-Case 'Cancelling history optimization retains completed batches and a scan 
     }
     finally {
         if ($scheduler) { $scheduler.StopAsync([Threading.CancellationToken]::None).GetAwaiter().GetResult(); $scheduler.Dispose() }
-        $timeout.Dispose(); $endpoint.Dispose(); $keeper.Dispose()
+        $timeout.Dispose(); $endpoint.Dispose(); $keeper.Dispose(); [Microsoft.Data.Sqlite.SqliteConnection]::ClearAllPools(); [IO.File]::Delete($database)
     }
+}
+
+Test-Case 'Empty successful findings retain the actual fallback model and cached primary model' {
+    $failure=[TransportReply]::new(); $failure.Status=500
+    $main=[TransportEndpoint]::new(@($failure)); $fallback=[TransportEndpoint]::new(@([TransportReply]::new()))
+    $capture=[AnalysisModelCapture]::new()
+    $timeout=[Threading.CancellationTokenSource]::new([timespan]::FromSeconds(8))
+    try {
+        $service=New-Analysis $main $fallback -MainModel 'gpt-6-astra' -FallbackModel 'gpt-5.6-luna'
+        $result=$service.AnalyzeEventsAsync((New-Events),$null,$timeout.Token,$capture.Callback).GetAwaiter().GetResult()
+        Assert-True ($result.Item1.Count -eq 0 -and $capture.Models.Count -eq 1 -and $capture.Models[0] -eq 'gpt-5.6-luna') 'Empty fallback response was labelled with the requested higher model.'
+    } finally { $timeout.Dispose(); $main.Dispose(); $fallback.Dispose() }
+    $endpoint=[TransportEndpoint]::new(@([TransportReply]::new()))
+    $timeout=[Threading.CancellationTokenSource]::new([timespan]::FromSeconds(8))
+    try {
+        $service=New-Analysis $endpoint -MainModel 'gpt-5.6-sol'
+        $config=$service.GetType().GetField('_settingsService',$flags).GetValue($service).Current
+        $config.EnableCaching=$true; $events=New-Events
+        foreach($attempt in 1..2) {
+            $capture.Models=@()
+            $null=$service.AnalyzeEventsAsync($events,$null,$timeout.Token,$capture.Callback).GetAwaiter().GetResult()
+            Assert-True ($capture.Models.Count -eq 1 -and $capture.Models[0] -eq 'gpt-5.6-sol') 'Cache hit lost model provenance.'
+        }
+        Assert-True ($endpoint.RequestCount -eq 1) 'Cached success called the endpoint again.'
+    } finally { $timeout.Dispose(); $endpoint.Dispose() }
 }
 
 Write-Output "$script:passed passed; $script:failed failed. Loopback HTTP only; no user-data writes."

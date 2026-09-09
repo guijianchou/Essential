@@ -5,10 +5,9 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using Microsoft.Windows.AppLifecycle;
+using LocalSecurityAudit.Helpers;
 using LocalSecurityAudit.Models;
 using LocalSecurityAudit.Services;
 
@@ -31,21 +30,33 @@ public static class Program
         if (ownerSid != null && ownerSid != identity.User?.Value)
         {
             // UAC can accept a different administrator's credentials. Do not silently use that profile's settings/database.
-            ShowStartupMessage("Extended mode must be elevated as the same Windows user. Different administrator credentials would open a different data profile. Use assistant mode or sign in with the intended account.");
+            ShowStartupMessage("Full-access mode must be elevated as the same Windows user. Different administrator credentials would open a different data profile.");
             return 1;
         }
 
+        using var instance = new SingleInstanceGuard(identity.User?.Value
+            ?? throw new InvalidOperationException("Windows user identity unavailable."));
+        if (!instance.TryAcquire())
+        {
+            instance.ActivateExisting();
+            return 0;
+        }
+
         string? modeOverride = args.Contains("--assistant", StringComparer.OrdinalIgnoreCase) ? AppMode.Assistant
+            : args.Contains("--full", StringComparer.OrdinalIgnoreCase) ? AppMode.Full
             : args.Contains("--extended", StringComparer.OrdinalIgnoreCase) ? AppMode.Extended : null;
         var settings = new SettingsService(modeOverride);
         bool elevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
-        if (settings.IsAssistantMode && elevated)
+        if (!AppMode.RequiresElevation(settings.ActiveMode) && elevated)
         {
-            ShowStartupMessage("Assistant mode must run without administrator privileges. Close this launch and open the app normally from File Explorer.");
+            ShowStartupMessage("Assistant and extended modes run without administrator privileges. Open the app normally from File Explorer, or choose full-access mode.");
             return 1;
         }
-        if (!settings.IsAssistantMode && !elevated)
+        if (AppMode.RequiresElevation(settings.ActiveMode) && !elevated)
         {
+            // The same-user elevated child must acquire the same key, not inherit a
+            // second mode-specific instance. A canceled prompt reacquires it below.
+            instance.Release();
             try
             {
                 var start = new ProcessStartInfo(Environment.ProcessPath
@@ -54,7 +65,7 @@ public static class Program
                     UseShellExecute = true,
                     Verb = "runas"
                 };
-                start.ArgumentList.Add("--extended");
+                start.ArgumentList.Add("--full");
                 start.ArgumentList.Add($"--owner-sid={identity.User?.Value}");
                 using var process = Process.Start(start);
                 if (process == null) throw new InvalidOperationException("Launch failed.");
@@ -66,20 +77,17 @@ public static class Program
             }
             catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
             {
-                ShowStartupMessage("Extended mode could not start. Opening assistant mode; the saved startup mode and extended database are unchanged.");
+                ShowStartupMessage("Full-access mode could not start. Opening assistant mode; the saved startup mode and existing databases are unchanged.");
+            }
+            if (!instance.TryAcquire())
+            {
+                instance.ActivateExisting();
+                return 0;
             }
             settings = new SettingsService(AppMode.Assistant);
         }
 
-        var activationArguments = AppInstance.GetCurrent().GetActivatedEventArgs();
-        var mainInstance = AppInstance.FindOrRegisterForKey($"LocalSecurityAudit.{settings.ActiveMode}");
-        if (!mainInstance.IsCurrent)
-        {
-            RedirectActivation(mainInstance, activationArguments);
-            return 0;
-        }
-
-        mainInstance.Activated += OnInstanceActivated;
+        instance.Listen(OnInstanceActivated);
 
         Application.Start(parameters =>
         {
@@ -97,7 +105,7 @@ public static class Program
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int MessageBox(IntPtr window, string text, string caption, uint type);
 
-    private static void OnInstanceActivated(object? sender, AppActivationArguments e)
+    private static void OnInstanceActivated()
     {
         if (Application.Current is App app)
         {
@@ -105,48 +113,4 @@ public static class Program
         }
     }
 
-    /// <summary>
-    /// Hands this launch over to the running instance. The redirect must not be awaited on the
-    /// STA thread, so it runs on a worker while this thread pumps COM messages until it is done.
-    /// </summary>
-    private static void RedirectActivation(AppInstance target, AppActivationArguments arguments)
-    {
-        IntPtr redirectEvent = CreateEvent(IntPtr.Zero, true, false, null);
-        if (redirectEvent == IntPtr.Zero)
-        {
-            target.RedirectActivationToAsync(arguments).AsTask().Wait();
-            return;
-        }
-
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                target.RedirectActivationToAsync(arguments).AsTask().Wait();
-            }
-            catch
-            {
-                // The new launch simply exits; the running instance stays as it was.
-            }
-            finally
-            {
-                SetEvent(redirectEvent);
-            }
-        });
-
-        _ = CoWaitForMultipleObjects(0, 0xFFFFFFFF, 1, new[] { redirectEvent }, out _);
-        CloseHandle(redirectEvent);
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateEvent(IntPtr lpEventAttributes, bool bManualReset, bool bInitialState, string? lpName);
-
-    [DllImport("kernel32.dll")]
-    private static extern bool SetEvent(IntPtr hEvent);
-
-    [DllImport("kernel32.dll")]
-    private static extern bool CloseHandle(IntPtr hObject);
-
-    [DllImport("ole32.dll")]
-    private static extern uint CoWaitForMultipleObjects(uint dwFlags, uint dwMilliseconds, ulong nHandles, IntPtr[] pHandles, out uint dwIndex);
 }

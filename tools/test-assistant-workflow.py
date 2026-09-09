@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, redirect_stderr, redirect_stdout
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import io
 import json
@@ -45,7 +46,150 @@ def prepared():
     return publisher.prepare_result(result, evidence, "0" * 64)
 
 
+def standard_fixture():
+    result, evidence = fixture()
+    evidence["SchemaVersion"] = result["Metadata"]["SchemaVersion"] = 2
+    evidence["Channels"].append({"LogName": "ForwardedEvents", "Status": "complete", "EventCount": 0, "Reason": "none"})
+    evidence["Channels"][0].update(Status="skipped", Reason="not_requested", EventCount=0)
+    evidence["Channels"][1]["EventCount"] = 2
+    for event in evidence["Events"]:
+        event.update(LogName="System", EventRef="System:" + event["EventRecordId"], EventId="1000")
+    result["Metadata"]["AnalyzedEventRefs"] = ["System:1", "System:2"]
+    result["Findings"][0].update(EventRef="System:2", RelatedEventRefs=["System:1", "System:2"], Category="System")
+    return result, evidence
+
+
 class AssistantWorkflowTests(unittest.TestCase):
+    def test_shared_status_uses_stronger_model_and_incremental_cursor_across_modes(self):
+        result, evidence = standard_fixture()
+        result["Metadata"]["AnalysisModel"] = "gpt-5.6-sol"
+        normalized = publisher.prepare_result(result, evidence, "0" * 64)
+        with tempfile.TemporaryDirectory(prefix="lsa-assistant-test-") as directory:
+            path = publisher.database_path(directory)
+            publisher.publish(normalized, path)
+            now = datetime(2026, 1, 3, tzinfo=timezone.utc)
+            for model in ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"):
+                state = publisher.status(path, model, now=now)
+                self.assertEqual(state["ScanReason"], "incremental")
+                self.assertEqual(state["SuggestedScanStart"], evidence["ScanEnd"])
+            state = publisher.status(path, "gpt-6-astra", now=now)
+            self.assertEqual(state["ScanReason"], "model_upgrade")
+            self.assertEqual(state["SuggestedScanStart"], "2025-12-27T00:00:00Z")
+            self.assertEqual(publisher.status(path, "gpt-6-astra", include_security=True, now=now)["ScanReason"], "initial")
+            native = Path(directory) / "audit_data.db"
+            with closing(sqlite3.connect(native)) as connection:
+                connection.execute("CREATE TABLE AuditResults (Id INTEGER PRIMARY KEY, Timestamp DATETIME, HealthScore INTEGER, FindingsJson TEXT, MetadataJson TEXT)")
+                connection.execute("CREATE TABLE ScanCheckpoints (Scope TEXT, ModelRank INTEGER, ScanEnd DATETIME)")
+                connection.execute("INSERT INTO ScanCheckpoints VALUES ('standard',3,'2026-01-02 12:00:00.000000')")
+                connection.commit()
+            state = publisher.status(path, "gpt-6-astra", now=now)
+            self.assertEqual(state["ScanReason"], "incremental")
+            self.assertEqual(state["SuggestedScanStart"], "2026-01-02T12:00:00Z")
+
+    def test_baseline_requires_contiguous_completed_days_before_model_promotion(self):
+        result, evidence = standard_fixture()
+        meta = publisher.prepare_result(result, evidence, "0" * 64)["Metadata"]
+        start = datetime(2025, 12, 26, tzinfo=timezone.utc)
+        records = []
+        for day in range(7):
+            part = deepcopy(meta)
+            part.update(AnalysisModel="gpt-6-astra", AnalysisModels=["gpt-6-astra"], BaselineStart="2025-12-26T00:00:00Z", BaselineEnd="2026-01-02T00:00:00Z",
+                        ScanStart=(start + timedelta(days=day)).isoformat().replace("+00:00", "Z"),
+                        ScanEnd=(start + timedelta(days=day+1)).isoformat().replace("+00:00", "Z"))
+            records.append(part)
+        cursor, rank = publisher.checkpoint([records[0], records[2]], False)
+        self.assertEqual(cursor, start + timedelta(days=1))
+        self.assertEqual(rank, -1)
+        self.assertEqual(publisher.checkpoint(records, False), (start + timedelta(days=7), 3))
+        records[3]["CoverageStatus"] = "partial"
+        self.assertEqual(publisher.checkpoint(records, False), (start + timedelta(days=3), -1))
+
+    def test_baseline_fields_are_paired_bounded_and_keep_exact_occurrence_times(self):
+        result, evidence = standard_fixture()
+        result["Metadata"].update(BaselineStart="2025-12-26T00:00:00Z", BaselineEnd=evidence["ScanEnd"])
+        normalized = publisher.prepare_result(result, evidence, "0" * 64)
+        self.assertEqual(normalized["Findings"][0]["EventTimes"], {event["EventRef"]: event["EventTimestamp"] for event in evidence["Events"]})
+        for changes in ({"BaselineStart":"2025-12-25T00:00:00Z"}, {"BaselineEnd":"2026-01-01T00:00:00Z"}):
+            invalid = deepcopy(result)
+            invalid["Metadata"].update(changes)
+            with self.assertRaises(publisher.ValidationError):
+                publisher.prepare_result(invalid, evidence, "0" * 64)
+        result["Metadata"].pop("BaselineStart")
+        with self.assertRaises(publisher.ValidationError):
+            publisher.prepare_result(result, evidence, "0" * 64)
+
+    def test_previous_publisher_rows_remain_idempotent_after_timeline_upgrade(self):
+        current = prepared()
+        legacy = deepcopy(current)
+        for issue in legacy["Findings"]:
+            issue.pop("EventTimes")
+        for field in ("AnalysisModels", "AnalysisCompleted", "MergeVersion"):
+            legacy["Metadata"].pop(field)
+        with tempfile.TemporaryDirectory(prefix="lsa-assistant-test-") as directory:
+            path = publisher.database_path(directory)
+            publisher.publish(legacy, path)
+            self.assertFalse(publisher.publish(current, path)["Added"])
+            with closing(sqlite3.connect(path)) as connection:
+                stored = json.loads(connection.execute("SELECT FindingsJson FROM AuditResults").fetchone()[0])
+            self.assertNotIn("EventTimes", stored[0])
+
+    def test_full_button_accepts_a_short_incremental_interval(self):
+        result, evidence = standard_fixture()
+        evidence["ScanStart"] = "2026-01-01T12:00:00Z"
+        self.assertEqual(publisher.prepare_result(result, evidence, "0" * 64)["Metadata"]["ScanType"], "Full Scan")
+
+    def test_v2_standard_scope_skips_security_without_claiming_full_coverage(self):
+        result, evidence = standard_fixture()
+        normalized = publisher.prepare_result(result, evidence, "0" * 64)
+        self.assertEqual(normalized["Metadata"]["CoverageStatus"], "limited")
+        self.assertEqual(normalized["Metadata"]["AnalyzedEventCount"], 2)
+        self.assertEqual(len(normalized["Metadata"]["Channels"]), 5)
+        self.assertIn("Security: skipped", normalized["Metadata"]["CoverageNotes"])
+        with tempfile.TemporaryDirectory(prefix="lsa-assistant-test-") as directory:
+            path = publisher.database_path(directory)
+            publisher.publish(normalized, path)
+            state = publisher.status(path)
+            self.assertIsNone(state["LastCompleteScanEnd"])
+            self.assertEqual(state["LastStandardScanEnd"], evidence["ScanEnd"])
+
+    def test_v2_denial_takes_precedence_over_intentional_skip(self):
+        result, evidence = standard_fixture()
+        evidence["Channels"][-1].update(Status="unavailable", Reason="access_denied")
+        normalized = publisher.prepare_result(result, evidence, "0" * 64)
+        self.assertEqual(normalized["Metadata"]["CoverageStatus"], "partial")
+        with tempfile.TemporaryDirectory(prefix="lsa-assistant-test-") as directory:
+            path = publisher.database_path(directory)
+            publisher.publish(normalized, path)
+            self.assertIsNone(publisher.status(path)["LastStandardScanEnd"])
+
+    def test_v2_all_five_channels_can_complete_including_forwarded_evidence(self):
+        result, evidence = standard_fixture()
+        evidence["Channels"][0].update(Status="complete", Reason="none")
+        evidence["Channels"][1]["EventCount"] = 0
+        evidence["Channels"][-1]["EventCount"] = 2
+        for event in evidence["Events"]:
+            event.update(LogName="ForwardedEvents", EventRef="ForwardedEvents:" + event["EventRecordId"])
+        result["Metadata"]["AnalyzedEventRefs"] = ["ForwardedEvents:1", "ForwardedEvents:2"]
+        result["Findings"][0].update(EventRef="ForwardedEvents:2", RelatedEventRefs=["ForwardedEvents:1", "ForwardedEvents:2"])
+        normalized = publisher.prepare_result(result, evidence, "0" * 64)
+        self.assertEqual(normalized["Metadata"]["CoverageStatus"], "complete")
+        self.assertEqual(normalized["Findings"][0]["LogName"], "ForwardedEvents")
+
+    def test_v2_cannot_skip_other_channels_hide_security_events_or_mix_schema_versions(self):
+        mutations = [
+            lambda r, e: e["Channels"][-1].update(Status="skipped", Reason="not_requested"),
+            lambda r, e: e["Channels"][0].update(EventCount=1),
+            lambda r, e: e["Channels"][0].update(Reason="access_denied"),
+            lambda r, e: e["Channels"].pop(),
+            lambda r, e: r["Metadata"].update(SchemaVersion=1),
+            lambda r, e: e["Events"][0].update(LogName="Security", EventRef="Security:1"),
+        ]
+        for mutate in mutations:
+            result, evidence = standard_fixture()
+            mutate(result, evidence)
+            with self.assertRaises(publisher.ValidationError):
+                publisher.prepare_result(result, evidence, "0" * 64)
+
     def test_evidence_and_model_are_bound_without_model_owned_source_fields(self):
         normalized = prepared()
         issue = normalized["Findings"][0]
@@ -150,7 +294,8 @@ class AssistantWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="lsa-assistant-test-") as directory:
             root = Path(directory)
             legacy = root / "audit_data.db"
-            legacy.write_bytes(b"Synthetic legacy marker; never touch this file")
+            with closing(sqlite3.connect(legacy)) as connection:
+                connection.execute("CREATE TABLE AuditResults (Id INTEGER PRIMARY KEY, Timestamp DATETIME, HealthScore INTEGER, FindingsJson TEXT, MetadataJson TEXT)")
             original = legacy.read_bytes()
             path = publisher.database_path(root)
             result = prepared()
@@ -219,7 +364,9 @@ class AssistantWorkflowTests(unittest.TestCase):
             path = publisher.database_path(directory)
             self.assertEqual(publisher.status(path)["RecordCount"], 0)
             self.assertFalse(path.parent.exists())
-            result = prepared()
+            raw, evidence = standard_fixture()
+            evidence["Channels"][0].update(Status="complete", Reason="none")
+            result = publisher.prepare_result(raw, evidence, "0" * 64)
             publisher.publish(result, path)
             partial = deepcopy(result)
             partial["Timestamp"] = "2026-01-03T00:00:00Z"

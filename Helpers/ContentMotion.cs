@@ -11,6 +11,8 @@ internal static class ContentMotion
     public static void SetLoading(FrameworkElement element, bool loading)
     {
         element.IsHitTestVisible = !loading;
+        // WinUI only exposes Translation after this opt-in, including for StopAnimation.
+        ElementCompositionPreview.SetIsTranslationEnabled(element, true);
         var visual = ElementCompositionPreview.GetElementVisual(element);
         visual.StopAnimation("Opacity");
         visual.StopAnimation("Translation.Y");
@@ -20,7 +22,6 @@ internal static class ContentMotion
             visual.Properties.InsertVector3("Translation", Vector3.Zero);
             return;
         }
-        ElementCompositionPreview.SetIsTranslationEnabled(element, true);
         var compositor = visual.Compositor;
         var ease = compositor.CreateCubicBezierEasingFunction(new Vector2(0.2f, 0), new Vector2(0, 1));
         var fade = compositor.CreateScalarKeyFrameAnimation();

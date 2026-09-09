@@ -9,7 +9,9 @@ $directory = Split-Path -Parent $assembly.Location
 foreach ($dependency in 'Microsoft.Data.Sqlite.dll', 'SQLitePCLRaw.batteries_v2.dll') {
     $null = [System.Reflection.Assembly]::LoadFrom((Join-Path $directory $dependency))
 }
-$null = [System.Runtime.InteropServices.NativeLibrary]::Load((Join-Path $directory 'runtimes/win-x64/native/e_sqlite3.dll'))
+$sqlitePath = Join-Path $directory 'e_sqlite3.dll'
+if (-not (Test-Path -LiteralPath $sqlitePath)) { $sqlitePath = Join-Path $directory 'runtimes/win-x64/native/e_sqlite3.dll' }
+$null = [System.Runtime.InteropServices.NativeLibrary]::Load($sqlitePath)
 [SQLitePCL.Batteries_V2]::Init()
 $flags = [System.Reflection.BindingFlags]'NonPublic,Instance,Static'
 
@@ -102,8 +104,10 @@ $logger = [System.Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObje
 $loggerType.GetField('_settingsService', $flags).SetValue($logger, $settingsService)
 $storageType = $assembly.GetType('LocalSecurityAudit.Services.DataStorageService', $true)
 $storage = [System.Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($storageType)
-$connectionString = "Data Source=workflow-$([guid]::NewGuid());Mode=Memory;Cache=Shared;Pooling=False"
+$database = Join-Path ([IO.Path]::GetTempPath()) "lsa-workflow-$([guid]::NewGuid()).db"
+$connectionString = "Data Source=$database;Pooling=False"
 $storageType.GetField('_connectionString', $flags).SetValue($storage, $connectionString)
+$storageType.GetField('_historyPaths', $flags).SetValue($storage, [string[]]@($database, "$database.assistant"))
 $keeper = [Microsoft.Data.Sqlite.SqliteConnection]::new($connectionString)
 $endpoint = $null
 $scheduler = $null
@@ -130,7 +134,9 @@ try {
           titleZh='Chinese title'; descriptionZh='Chinese description'; rootCauseZh='Chinese cause'; recommendationZh='Chinese action'}
     })
     $payload = @{issues=$translated} | ConvertTo-Json -Depth 8 -Compress
-    $reply = @{output_text=$payload} | ConvertTo-Json -Compress
+    $reply = @{object='response'; status='completed'; output=@(
+        @{type='message'; role='assistant'; status='completed'; content=@(@{type='output_text'; text=$payload})}
+    )} | ConvertTo-Json -Compress -Depth 8
     $endpoint = [AuditLoopbackEndpoint]::new($reply)
     $route = [LocalSecurityAudit.Models.AiTargetSettings]::new()
     $route.BaseUrl = $endpoint.Url
@@ -182,4 +188,6 @@ finally {
     if ($scheduler) { $null = $scheduler.StopAsync([System.Threading.CancellationToken]::None).GetAwaiter().GetResult(); $scheduler.Dispose() }
     if ($endpoint) { $endpoint.Dispose() }
     $keeper.Dispose()
+    [Microsoft.Data.Sqlite.SqliteConnection]::ClearAllPools()
+    [IO.File]::Delete($database)
 }

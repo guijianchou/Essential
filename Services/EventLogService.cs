@@ -99,7 +99,7 @@ public class EventLogService
             yield return evt;
     }
 
-    public async Task<List<SecurityEvent>> ReadAllEventsAsync(
+    public async Task<EventCollectionResult> ReadAllEventsAsync(
         DateTime from,
         DateTime to,
         CancellationToken cancellationToken = default,
@@ -111,58 +111,57 @@ public class EventLogService
             $"Event log read started: from={from:O}, to={to:O}");
         return await Task.Run(async () =>
         {
-            var events = new List<SecurityEvent>();
-
-            try
+            var result = new EventCollectionResult();
+            var queries = BuildCollectionQueries(_settingsService.IsFullMode, from, to);
+            foreach (var (logName, query) in queries)
             {
-                ReportChannel(0, "Security");
-                await foreach (var evt in ReadSecurityEventsAsync(from, to, cancellationToken))
+                cancellationToken.ThrowIfCancellationRequested();
+                progress?.Report(new(AuditStage.Collect, AuditStepState.Active,
+                    "Reading {0}; {1:N0} events collected", logName, result.Events.Count)
+                    { CompletedUnits = result.Channels.Count, TotalUnits = queries.Count });
+                if (query == null)
                 {
-                    events.Add(evt);
+                    result.Channels.Add(new(logName, "skipped", 0, "not_requested"));
+                    continue;
                 }
-
-                ReportChannel(1, "System");
-                await foreach (var evt in ReadSystemEventsAsync(from, to, cancellationToken))
+                var channelEvents = new List<SecurityEvent>();
+                string status = "complete", reason = "none";
+                try
                 {
-                    events.Add(evt);
+                    await foreach (var evt in ReadEventsFromLogAsync(logName, query, cancellationToken))
+                    {
+                        // Probe one extra event, like the external collector, without silently losing coverage.
+                        if (channelEvents.Count == 2000) { status = "truncated"; reason = "limit"; break; }
+                        channelEvents.Add(evt);
+                    }
                 }
-
-                ReportChannel(2, "Application");
-                await foreach (var evt in ReadApplicationEventsAsync(from, to, cancellationToken))
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    events.Add(evt);
+                    channelEvents.Clear();
+                    status = "unavailable";
+                    reason = ex switch
+                    {
+                        UnauthorizedAccessException => "access_denied",
+                        EventLogNotFoundException => "not_found",
+                        EventLogException error when (error.HResult & 0xffff) == 5 => "access_denied",
+                        _ => "query_failed"
+                    };
+                    // Log only the channel/status, never exception text containing event data.
+                    _diagnosticLogService.Write($"Event channel unavailable: channel={logName}, reason={reason}");
                 }
-
-                ReportChannel(3, "Setup");
-                await foreach (var evt in ReadSetupEventsAsync(from, to, cancellationToken))
-                {
-                    events.Add(evt);
-                }
-
-                ReportChannel(4, "Firewall (Security)");
-                // Windows Filtering Platform audit events are in Security, not the Firewall channel.
-                await foreach (var evt in ReadFirewallEventsAsync(from, to, cancellationToken))
-                {
-                    events.Add(evt);
-                }
-
-                _diagnosticLogService.Write(
-                    $"Event log read completed: events={events.Count}, elapsedMs={stopwatch.ElapsedMilliseconds}");
-                return events;
+                result.Events.AddRange(channelEvents);
+                result.Channels.Add(new(logName, status, channelEvents.Count, reason));
             }
-            catch (Exception ex)
-            {
-                _diagnosticLogService.WriteException(
-                    $"Event log read failed: elapsedMs={stopwatch.ElapsedMilliseconds}",
-                    ex);
-                throw;
-            }
-
-            void ReportChannel(int completed, string channel) => progress?.Report(
-                new(AuditStage.Collect, AuditStepState.Active, "Reading {0}; {1:N0} events collected", channel, events.Count)
-                { CompletedUnits = completed, TotalUnits = 5 });
+            _diagnosticLogService.Write($"Event log read completed: events={result.Events.Count}, coverage={result.CoverageStatus}, elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return result;
         }, cancellationToken);
     }
+
+    internal static List<(string LogName, string? Query)> BuildCollectionQueries(bool fullMode, DateTime from, DateTime to) =>
+        new[] { "Security", "System", "Application", "Setup", "ForwardedEvents" }
+            .Select(log => (log, log == "Security"
+                ? fullMode ? BuildEventIdQuery(log, from, to, SecurityEventIds.Concat(FirewallEventIds).Distinct().ToArray()) : null
+                : BuildQuery(from, to, FailureLevels))).ToList();
 
     private async IAsyncEnumerable<SecurityEvent> ReadEventsFromLogAsync(
         string logName,
@@ -170,19 +169,20 @@ public class EventLogService
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _settingsService.EnsureExtendedMode();
+        if (logName == "Security" && !_settingsService.IsFullMode)
+            throw new InvalidOperationException("Security collection is only enabled in full-access mode.");
         await Task.Run(() => { }, cancellationToken); // Ensure async context
 
-        EventLogQuery query = new(logName, PathType.LogName, xpathQuery);
+        EventLogQuery query = new(logName, PathType.LogName, xpathQuery) { ReverseDirection = true };
 
         using EventLogReader reader = new(query);
 
         EventRecord? eventRecord;
         while ((eventRecord = reader.ReadEvent()) != null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             using (eventRecord)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 yield return EventLogParser.Parse(eventRecord, logName);
             }
         }
@@ -202,6 +202,6 @@ public class EventLogService
         string utcFrom = from.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
         string utcTo = to.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
-        return $"*[System[TimeCreated[@SystemTime >= '{utcFrom}' and @SystemTime <= '{utcTo}'] and {systemPredicate}]]";
+        return $"*[System[TimeCreated[@SystemTime >= '{utcFrom}' and @SystemTime < '{utcTo}'] and {systemPredicate}]]";
     }
 }

@@ -11,10 +11,11 @@ using LocalSecurityAudit.Models;
 
 namespace LocalSecurityAudit.Services;
 
-public class DataStorageService
+public partial class DataStorageService
 {
     private readonly string _connectionString;
     private readonly string _dbPath;
+    private readonly string[] _historyPaths;
     public string DatabasePath => _dbPath;
     public bool IsReadOnly { get; }
 
@@ -22,6 +23,7 @@ public class DataStorageService
     {
         IsReadOnly = AppMode.Normalize(mode) == AppMode.Assistant;
         _dbPath = GetDatabasePath(mode, dataDirectory);
+        _historyPaths = new[] { GetDatabasePath(AppMode.Extended, dataDirectory), GetDatabasePath(AppMode.Assistant, dataDirectory) };
         Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
         _connectionString = new SqliteConnectionStringBuilder
         {
@@ -68,6 +70,10 @@ public class DataStorageService
             );
 
             CREATE INDEX IF NOT EXISTS idx_timestamp ON AuditResults(Timestamp DESC);
+            CREATE TABLE IF NOT EXISTS ScanCheckpoints (
+                Scope TEXT NOT NULL, ModelRank INTEGER NOT NULL, ScanEnd DATETIME NOT NULL,
+                PRIMARY KEY (Scope, ModelRank)
+            );
         ";
 
         await createTableCmd.ExecuteNonQueryAsync();
@@ -97,6 +103,7 @@ public class DataStorageService
                 result.Metadata != null ? JsonSerializer.Serialize(result.Metadata) : DBNull.Value);
 
             await insertCmd.ExecuteNonQueryAsync();
+            await SaveCheckpointAsync(connection, transaction, result);
 
             transaction.Commit();
         }
@@ -109,56 +116,15 @@ public class DataStorageService
 
     public async Task<AuditResult?> GetTodayResultAsync()
     {
-        using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync();
-
-        DateTime localStart = DateTime.Today;
-        DateTime utcStart = localStart.ToUniversalTime();
-        DateTime utcEnd = localStart.AddDays(1).ToUniversalTime();
-
-        var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT Timestamp, HealthScore, FindingsJson, MetadataJson
-            FROM AuditResults
-            WHERE Timestamp >= @start AND Timestamp < @end
-            ORDER BY Timestamp DESC, Id DESC
-        ";
-        cmd.Parameters.AddWithValue("@start", utcStart);
-        cmd.Parameters.AddWithValue("@end", utcEnd);
-
-        using var reader = await cmd.ExecuteReaderAsync();
-
-        while (await reader.ReadAsync())
-        {
-            if (ReadResult(reader) is { } result) return result;
-        }
-
-        return null;
+        return (await GetResultsAsync(DateTime.Today.ToUniversalTime(), DateTime.Today.AddDays(1).ToUniversalTime())).LastOrDefault();
     }
 
-    public async Task<AuditResult?> GetLatestResultAsync()
+    public async Task<AuditResult?> GetLatestResultAsync(string? mode = null)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync();
-
-        var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT Timestamp, HealthScore, FindingsJson, MetadataJson
-            FROM AuditResults
-            ORDER BY Timestamp DESC, Id DESC
-        ";
-
-        using var reader = await cmd.ExecuteReaderAsync();
-
-        bool hasRows = false;
-        while (await reader.ReadAsync())
-        {
-            hasRows = true;
-            if (ReadResult(reader) is { } result) return result;
-        }
-
-        if (hasRows) throw new InvalidDataException(AppText.Get("No readable audit records were found."));
-        return null;
+        AuditResult? latest = null;
+        await foreach (var result in ReadHistoryAsync())
+            if ((mode == null || AuditHistory.Text(result, "Mode") == mode) && (latest == null || result.Timestamp >= latest.Timestamp)) latest = result;
+        return latest;
     }
 
     public Task<List<AuditResult>> GetTrendsAsync(int days = 30)
@@ -167,19 +133,30 @@ public class DataStorageService
         return GetResultsAsync(today.AddDays(1 - Math.Max(1, days)).ToUniversalTime(), today.AddDays(1).ToUniversalTime());
     }
 
+    public async Task<List<AuditActivityDay>> GetAuditActivityAsync(DateTime today)
+    {
+        var days = new Dictionary<DateTime, AuditActivityDay>();
+        await foreach (var result in ReadHistoryAsync(endUtc: today.Date.AddDays(1).ToUniversalTime()))
+        {
+            DateTime date = result.Timestamp.ToLocalTime().Date;
+            if (!days.TryGetValue(date, out var day)) days[date] = day = new() { Date = date };
+            day.Scans++;
+            day.Findings += result.Findings.Count;
+            if (result.HasAssessment)
+            {
+                day.AssessedScans++;
+                day.ScoreSum += HealthScoreCalculator.Calculate(result.Findings).Score;
+            }
+        }
+        return days.Values.OrderBy(day => day.Date).ToList();
+    }
+
     public async Task<Dictionary<DateTime, int>> GetRecentAuditDatesAsync(DateTime today)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Timestamp FROM AuditResults WHERE Timestamp>=@start AND Timestamp<@end";
-        command.Parameters.AddWithValue("@start", today.AddDays(-6).ToUniversalTime());
-        command.Parameters.AddWithValue("@end", today.AddDays(1).ToUniversalTime());
-        using var reader = await command.ExecuteReaderAsync();
         var dates = new Dictionary<DateTime, int>();
-        while (await reader.ReadAsync())
+        await foreach (var result in ReadHistoryAsync(today.AddDays(-6).ToUniversalTime(), today.AddDays(1).ToUniversalTime()))
         {
-            DateTime date = AsUtc(reader.GetDateTime(0)).ToLocalTime().Date;
+            DateTime date = result.Timestamp.ToLocalTime().Date;
             dates[date] = dates.GetValueOrDefault(date) + 1;
         }
         return dates;
@@ -187,33 +164,9 @@ public class DataStorageService
 
     public async Task<List<AuditResult>> GetResultsAsync(DateTime startUtc, DateTime endUtc)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync();
-
-        var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT Timestamp, HealthScore, FindingsJson, MetadataJson
-            FROM AuditResults
-            WHERE Timestamp >= @start AND Timestamp < @end
-            ORDER BY Timestamp ASC, Id ASC
-        ";
-
-        cmd.Parameters.AddWithValue("@start", startUtc.ToUniversalTime());
-        cmd.Parameters.AddWithValue("@end", endUtc.ToUniversalTime());
-
         var results = new List<AuditResult>();
-
-        using var reader = await cmd.ExecuteReaderAsync();
-
-        bool hasRows = false;
-        while (await reader.ReadAsync())
-        {
-            hasRows = true;
-            if (ReadResult(reader) is { } result) results.Add(result);
-        }
-
-        if (hasRows && results.Count == 0) throw new InvalidDataException(AppText.Get("No readable audit records were found."));
-        return results;
+        await foreach (var result in ReadHistoryAsync(startUtc, endUtc)) results.Add(result);
+        return results.OrderBy(result => result.Timestamp).ToList();
     }
 
     private static AuditResult? ReadResult(SqliteDataReader reader)
@@ -221,7 +174,7 @@ public class DataStorageService
         try
         {
             var findings = JsonSerializer.Deserialize<List<AuditIssue>>(reader.GetString(2));
-            if (findings == null || findings.Any(issue => issue == null)) return null;
+            if (findings == null || findings.Any(issue => issue == null || issue.EventTimes == null || issue.RelatedEventRefs == null)) return null;
             return new AuditResult
             {
                 Timestamp = AsUtc(reader.GetDateTime(0)),
@@ -249,11 +202,18 @@ public class DataStorageService
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
+        // Preserve progress independently of the configurable history retention period.
+        using var transaction = connection.BeginTransaction();
+        var records = await GetResultsAsync(DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc), DateTime.UtcNow.AddMinutes(1));
+        foreach (var result in records.Where(result => AuditHistory.Text(result, "Mode") != AppMode.Assistant))
+            await SaveCheckpointAsync(connection, transaction, result);
         var cleanupCmd = connection.CreateCommand();
+        cleanupCmd.Transaction = transaction;
         cleanupCmd.CommandText = "DELETE FROM AuditResults WHERE Timestamp < @cutoff";
         cleanupCmd.Parameters.AddWithValue("@cutoff", DateTime.Today.AddDays(1 - Math.Max(1, retentionDays)).ToUniversalTime());
 
         await cleanupCmd.ExecuteNonQueryAsync();
+        transaction.Commit();
     }
 
     public async Task VacuumDatabaseAsync()
@@ -270,12 +230,9 @@ public class DataStorageService
 
     public async Task<int> GetAuditRecordCountAsync()
     {
-        using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync();
-
-        var countCmd = connection.CreateCommand();
-        countCmd.CommandText = "SELECT COUNT(*) FROM AuditResults";
-        return Convert.ToInt32(await countCmd.ExecuteScalarAsync());
+        int count = 0;
+        await foreach (var result in ReadHistoryAsync()) count++;
+        return count;
     }
 
     public Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> GetLegacyFindingsAsync()
@@ -382,19 +339,33 @@ public class DataStorageService
     {
         // data_version detects commits from another connection, including commits still in a WAL.
         // It must be read on the same connection each time, without holding a read transaction.
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder(_connectionString) { Pooling = false }.ToString());
-        await connection.OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
-        command.CommandText = "PRAGMA data_version";
-        long version = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
-        changed();
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
-        while (await timer.WaitForNextTickAsync(cancellationToken))
+        var monitors = new Dictionary<string, (SqliteConnection Connection, long Version)>();
+        try
         {
-            long next = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
-            if (next == version) continue;
-            version = next;
-            changed();
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+            do
+            {
+                bool update = false;
+                foreach (string path in _historyPaths)
+                {
+                    if (!File.Exists(path)) continue;
+                    if (!monitors.TryGetValue(path, out var monitor))
+                    {
+                        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                        { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 5 }.ToString());
+                        monitors[path] = monitor = (connection, -1);
+                        await connection.OpenAsync(cancellationToken);
+                    }
+                    using var command = monitor.Connection.CreateCommand();
+                    command.CommandText = "PRAGMA data_version";
+                    long next = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
+                    if (next == monitor.Version) continue;
+                    monitors[path] = (monitor.Connection, next);
+                    update = true;
+                }
+                if (update) changed();
+            } while (await timer.WaitForNextTickAsync(cancellationToken));
         }
+        finally { foreach (var monitor in monitors.Values) monitor.Connection.Dispose(); }
     }
 }

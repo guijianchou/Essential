@@ -80,14 +80,6 @@ public sealed partial class SettingsPage : Page
         ViewModel.ShowOperationStatus = false;
     }
 
-    private void OnTargetPasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (sender is PasswordBox passwordBox && passwordBox.DataContext is AiTarget target)
-        {
-            target.ApiKey = passwordBox.Password;
-        }
-    }
-
     private void OnRemoveTargetClicked(object sender, RoutedEventArgs e)
     {
         if (sender is Button button && button.Tag is AiTarget target)

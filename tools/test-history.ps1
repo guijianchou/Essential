@@ -9,7 +9,9 @@ $assembly = [Reflection.Assembly]::LoadFrom((Resolve-Path -LiteralPath $Assembly
 $assemblyDirectory = Split-Path -Parent $assembly.Location
 $null = [Reflection.Assembly]::LoadFrom((Join-Path $assemblyDirectory 'Microsoft.Data.Sqlite.dll'))
 $null = [Reflection.Assembly]::LoadFrom((Join-Path $assemblyDirectory 'SQLitePCLRaw.batteries_v2.dll'))
-$null = [Runtime.InteropServices.NativeLibrary]::Load((Join-Path $assemblyDirectory 'runtimes/win-x64/native/e_sqlite3.dll'))
+$sqlitePath = Join-Path $assemblyDirectory 'e_sqlite3.dll'
+if (-not (Test-Path -LiteralPath $sqlitePath)) { $sqlitePath = Join-Path $assemblyDirectory 'runtimes/win-x64/native/e_sqlite3.dll' }
+$null = [Runtime.InteropServices.NativeLibrary]::Load($sqlitePath)
 [SQLitePCL.Batteries_V2]::Init()
 $flags = [Reflection.BindingFlags]'NonPublic,Instance,Static'
 $storageType = $assembly.GetType('LocalSecurityAudit.Services.DataStorageService', $true)
@@ -35,16 +37,18 @@ function Test-Case([string]$Name, [scriptblock]$Action) {
 }
 
 function Use-HistoryDatabase([scriptblock]$Action) {
-    $connectionString = "Data Source=history-$([guid]::NewGuid());Mode=Memory;Cache=Shared;Pooling=False"
+    $database = Join-Path ([IO.Path]::GetTempPath()) "lsa-history-$([guid]::NewGuid()).db"
+    $connectionString = "Data Source=$database;Pooling=False"
     $keeper = [Microsoft.Data.Sqlite.SqliteConnection]::new($connectionString)
     try {
         $keeper.Open()
         $storage = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($storageType)
         $storageType.GetField('_connectionString', $flags).SetValue($storage, $connectionString)
+        $storageType.GetField('_historyPaths', $flags).SetValue($storage, [string[]]@($database, "$database.assistant"))
         $storageType.GetMethod('InitializeDatabaseAsync', $flags).Invoke($storage, @()).GetAwaiter().GetResult()
         & $Action $storage $keeper
     }
-    finally { $keeper.Dispose() }
+    finally { $keeper.Dispose(); [Microsoft.Data.Sqlite.SqliteConnection]::ClearAllPools(); [IO.File]::Delete($database) }
 }
 
 function Add-Record($Connection, [datetime]$Timestamp, [string]$Findings = '[]', [string]$Metadata = '{"EventCount":1}') {
@@ -97,7 +101,11 @@ Test-Case 'Latest audit falls back past malformed rows without changing stored d
         $latest = $storage.GetLatestResultAsync().GetAwaiter().GetResult()
         Assert-True ($latest.Findings[0].Title -eq 'Last available') 'Latest audit did not recover the last readable record.'
         Assert-True ($latest.Timestamp.Kind -eq 'Utc') 'Stored timestamps lost their UTC kind.'
-        Assert-True ($storage.GetAuditRecordCountAsync().GetAwaiter().GetResult() -eq 6) 'Reading history mutated or deleted rows.'
+        Assert-True ($storage.GetAuditRecordCountAsync().GetAwaiter().GetResult() -eq 1) 'Invalid records were counted as readable audits.'
+        $check = $connection.CreateCommand()
+        $check.CommandText = 'SELECT count(*) FROM AuditResults'
+        Assert-True ($check.ExecuteScalar() -eq 6) 'Reading history mutated or deleted rows.'
+        $check.Dispose()
         Assert-True ($storage.GetTodayResultAsync().GetAwaiter().GetResult().Findings[0].Title -eq 'Last available') 'Today lookup did not skip malformed rows.'
     }
 }
@@ -256,10 +264,33 @@ Test-Case 'Dashboard keeps its last successful display when storage or a scan fa
         $failure = [LocalSecurityAudit.Services.AuditFailedEventArgs]::new('Synthetic scan failure')
         $null = $type.GetMethod('OnAuditFailed', $flags).Invoke($model, @($null, $failure))
         Assert-True ($model.HasAuditData -and $model.HealthScore -eq 85) 'Failed scan replaced the previous audit.'
+        Assert-True ($model.IsStatusVisible -and $model.StatusSeverity.ToString() -eq 'Error' -and $model.StatusMessage.Contains($failure.Message)) 'The dashboard did not show the terminal scan error.'
+        $command = $connection.CreateCommand()
+        $command.CommandText = 'UPDATE AuditResults SET FindingsJson=''[{"Title":"Available audit","Severity":"High","Recommendation":"Keep evidence"}]'''
+        $null = $command.ExecuteNonQuery()
+        $command.Dispose()
+        $load.Invoke($model, @()).GetAwaiter().GetResult()
+        Assert-True ($model.IsStatusVisible -and $model.StatusSeverity.ToString() -eq 'Error' -and $model.StatusMessage.Contains($failure.Message)) 'A successful history refresh hid the failed scan.'
+        $model.IsStatusVisible = $false
+        $load.Invoke($model, @()).GetAwaiter().GetResult()
+        Assert-True (-not $model.IsStatusVisible) 'Refreshing history reopened a dismissed scan error.'
         $type.GetField('_isLoadingData', $flags).SetValue($model, $true)
         $null = $type.GetMethod('OnAuditFailed', $flags).Invoke($model, @($null, $failure))
         Assert-True $model.IsLoading 'A scan event incorrectly ended an ongoing data read.'
     }
+}
+
+Test-Case 'Unassessed trend reports do not carry an assessed health indicator' {
+    $model = New-TrendsModel
+    $results = [Collections.Generic.List[LocalSecurityAudit.Models.AuditResult]]::new()
+    $results.Add((New-Scan ([datetime]::Today) @('Low') $false))
+    $results[0].Metadata['CoverageStatus'] = [System.Text.Json.JsonSerializer]::SerializeToElement('partial', [string])
+    $apply = $trendsType.GetMethod('ApplyResults', $flags)
+    $null = $apply.Invoke($model, @($results, 7, [datetime]::Today))
+    Assert-True ($model.HasData -and -not $model.HasAssessment -and $model.AverageHealthText -eq '--') 'Unassessed history was marked as assessed.'
+    $results.Add((New-Scan ([datetime]::Today.AddHours(1)) @('Low') $true))
+    $null = $apply.Invoke($model, @($results, 7, [datetime]::Today))
+    Assert-True $model.HasAssessment 'An assessed scan did not enable its health indicator.'
 }
 
 Test-Case 'Scan completion and history updates reload selected-period reports and bilingual text' {
@@ -359,10 +390,12 @@ Test-Case 'Dashboard days choose the latest readable scan on that local day and 
         $model.FindingSections = [Collections.ObjectModel.ObservableCollection[LocalSecurityAudit.ViewModels.FindingSection]]::new()
         $model.RecentDays = [Collections.Generic.List[LocalSecurityAudit.ViewModels.DashboardDay]]::new()
         $model.LoadDataCommand.ExecuteAsync($null).GetAwaiter().GetResult()
-        Assert-True ($model.RecentDays.Count -eq 7 -and $model.PriorityFindings[0].Title -eq 'Today') 'Week navigation changed the default latest audit.'
+        Assert-True ($model.RecentDays.Count -eq 7 -and $model.TotalFindings -eq 3 -and $model.SelectedDayText.StartsWith($today.ToString('yyyy-MM-dd'))) 'Default view lost the shared overview or latest audit date.'
         $week = $model.RecentDays
         $yesterday = $model.RecentDays[5]
         $model.SelectDayCommand.Execute($model.RecentDays[5])
+        Assert-True ($model.SelectedAuditLabel -eq [LocalSecurityAudit.Services.AppText]::Format('Audit on {0:d}', $yesterday.Date)) 'Date title did not change with selection.'
+        Assert-True ($model.PriorityFindings.Count -eq 0 -or $model.PriorityFindings[0].Title -eq 'Yesterday latest') 'New date temporarily displayed old-date findings.'
         $model.LoadDataCommand.ExecutionTask.GetAwaiter().GetResult()
         Assert-True ($model.PriorityFindings[0].Title -eq 'Yesterday latest' -and $model.HighCount -eq 1 -and $model.RecentDays[5].IsSelected) 'Selected date did not load the latest readable record.'
         Assert-True ([object]::ReferenceEquals($week, $model.RecentDays) -and [object]::ReferenceEquals($yesterday, $model.RecentDays[5])) 'Reloading replaced the date buttons and their keyboard focus.'
@@ -377,7 +410,29 @@ Test-Case 'Dashboard days choose the latest readable scan on that local day and 
         Assert-True ($model.PriorityFindings[0].Title -eq 'Today' -and -not $model.IsDateLoading) 'A stale selection overwrote the current day.'
         Add-Record $connection $today.AddDays(-1).AddHours(14) '[{"Title":"Another scan","Severity":"Low"}]'
         $model.LoadDataCommand.ExecuteAsync($null).GetAwaiter().GetResult()
-        Assert-True ([object]::ReferenceEquals($yesterday, $model.RecentDays[5]) -and $yesterday.Scans -eq 4) 'Date counts did not update on the existing buttons.'
+        Assert-True ([object]::ReferenceEquals($yesterday, $model.RecentDays[5]) -and $yesterday.Scans -eq 3) 'Readable date counts did not update on the existing buttons.'
+        $model.SelectDayCommand.Execute($yesterday)
+        $model.LoadDataCommand.ExecutionTask.GetAwaiter().GetResult()
+        $settingsType = $assembly.GetType('LocalSecurityAudit.Services.SettingsService', $true)
+        $settingsService = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($settingsType)
+        $settings = [LocalSecurityAudit.Models.AppSettings]::new()
+        $settings.Mode = 'extended'
+        $settings.FastScanRangeHours = 4
+        $settings.DiagnosticLoggingEnabled = $false
+        $settingsType.GetProperty('Current').SetValue($settingsService, $settings)
+        $settingsType.GetField('<ActiveMode>k__BackingField', $flags).SetValue($settingsService, 'extended')
+        $loggerType = $assembly.GetType('LocalSecurityAudit.Services.DiagnosticLogService', $true)
+        $logger = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($loggerType)
+        $loggerType.GetField('_settingsService', $flags).SetValue($logger, $settingsService)
+        # Missing collector deliberately fails before any real event-log or network access.
+        $scanScheduler = [LocalSecurityAudit.Services.AuditSchedulerService]::new($null, $null, $storage, $settingsService, $logger)
+        $type.GetField('_schedulerService', $flags).SetValue($model, $scanScheduler)
+        try {
+            $model.RunFastScanCommand.ExecuteAsync($null).GetAwaiter().GetResult()
+            $model.LoadDataCommand.ExecutionTask.GetAwaiter().GetResult()
+            Assert-True ($model.SelectedAuditLabel -eq [LocalSecurityAudit.Services.AppText]::Get('Latest audit') -and $model.TotalFindings -eq 4 -and $model.RecentDays[6].IsSelected) 'A failed new scan did not restore the shared overview and latest audit date.'
+        }
+        finally { $scanScheduler.Dispose() }
         $command = $connection.CreateCommand()
         $command.CommandText = 'DROP TABLE AuditResults'
         $null = $command.ExecuteNonQuery()

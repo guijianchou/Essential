@@ -20,6 +20,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
     private Task? _runningTask;
     private Task? _initialTask;
     private Task? _historyTask;
+    private Task? _watchTask;
     private CancellationTokenSource? _historyCts;
     private CancellationTokenSource? _cts;
     private CancellationTokenSource? _loopCts;
@@ -32,6 +33,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
     private AuditStage _currentStage;
     public bool IsScanning { get; private set; }
     public bool IsAssistantMode => _settingsService.IsAssistantMode;
+    public string ActiveMode => _settingsService.ActiveMode;
 
     public event EventHandler<AuditCompletedEventArgs>? AuditCompleted;
     public event EventHandler<AuditFailedEventArgs>? AuditFailed;
@@ -68,10 +70,10 @@ public class AuditSchedulerService : IHostedService, IDisposable
             _isStopping = false;
             startCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _cts = startCts;
+            _watchTask = Task.Run(() => WatchAssistantResultsAsync(startCts.Token), startCts.Token);
 
             if (IsAssistantMode)
             {
-                _runningTask = Task.Run(() => WatchAssistantResultsAsync(startCts.Token), startCts.Token);
                 return Task.CompletedTask;
             }
 
@@ -220,6 +222,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
         if (initialTask != null) tasks.Add(ObserveTaskAsync(initialTask));
         if (runningTask != null) tasks.Add(ObserveTaskAsync(runningTask));
         if (historyTask != null) tasks.Add(ObserveTaskAsync(historyTask));
+        if (_watchTask != null) tasks.Add(ObserveTaskAsync(_watchTask));
         tasks.AddRange(retiredLoops.Select(loop => ObserveTaskAsync(loop.Task)));
 
         var completion = Task.WhenAll(tasks);
@@ -295,9 +298,11 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
     public async Task<bool> ExecuteAuditAsync(
         bool fastScan = true,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int fullScanDays = 1)
     {
         _settingsService.EnsureExtendedMode();
+        if (!fastScan && fullScanDays is not (1 or 2 or 7)) throw new ArgumentOutOfRangeException(nameof(fullScanDays));
         await _auditGate.WaitAsync(cancellationToken);
         var stopwatch = Stopwatch.StartNew();
         try
@@ -306,26 +311,21 @@ public class AuditSchedulerService : IHostedService, IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             IsScanning = true;
             DateTime endTime = DateTime.UtcNow;
-            if (fastScan && _lastScanTime == DateTime.MinValue && _settingsService.Current.FastScanRangeHours == 0)
-            {
-                try
-                {
-                    var previous = await _storageService.GetLatestResultAsync();
-                    _lastScanTime = GetStoredScanEnd(previous, endTime);
-                }
-                catch (System.IO.InvalidDataException ex)
-                {
-                    _diagnosticLogService.WriteException("No readable scan cursor; using the initial fast-scan window", ex);
-                }
-            }
-            DateTime startTime = GetScanStart(fastScan, endTime, _lastScanTime, _settingsService.Current);
+            var checkpoint = await _storageService.GetScanCheckpointAsync(ActiveMode);
+            string requestedModel = _settingsService.Current.AiTargets.FirstOrDefault(target => target.Name == AiTargetSettings.MainName)?.Model
+                ?? _settingsService.Current.AiTargets.FirstOrDefault()?.Model ?? string.Empty;
+            bool modelUpgrade = checkpoint.BestModelRank >= 0 && AiModelCatalog.Rank(requestedModel) > checkpoint.BestModelRank;
+            _lastScanTime = checkpoint.Cursor;
+            DateTime startTime = GetScanStart(fastScan, endTime, _lastScanTime, _settingsService.Current, fullScanDays, modelUpgrade);
+            string scanReason = modelUpgrade ? "model_upgrade" : _lastScanTime == default ? "initial" : "incremental";
 
             _diagnosticLogService.Write(
-                $"Audit started: type={(fastScan ? "fast" : "full")}, from={startTime:O}, to={endTime:O}");
+                $"Audit started: type={(fastScan ? "fast" : "full")}, reason={scanReason}, model={requestedModel}, from={startTime:O}, to={endTime:O}");
             ReportProgress(new(AuditStage.Collect, AuditStepState.Active, fastScan
                 ? "Fast scan: reading Windows event logs..."
                 : "Full scan: reading Windows event logs...") { StartsScan = true });
-            var events = await _eventLogService.ReadAllEventsAsync(startTime, endTime, cancellationToken, new AuditProgressReporter(ReportProgress));
+            var collection = await _eventLogService.ReadAllEventsAsync(startTime, endTime, cancellationToken, new AuditProgressReporter(ReportProgress));
+            var events = collection.Events;
             _diagnosticLogService.Write(
                 $"Event log read completed: type={(fastScan ? "fast" : "full")}, events={events.Count}, elapsedMs={stopwatch.ElapsedMilliseconds}");
             ReportProgress(new(AuditStage.Collect, AuditStepState.Done, "{0:N0} events collected", events.Count)
@@ -337,6 +337,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             List<AuditIssue> issues;
             int analyzedEventCount = 0;
+            IReadOnlyList<string> analysisModels = Array.Empty<string>();
             if (events.Count == 0)
             {
                 ReportProgress(new(AuditStage.Route, AuditStepState.Skipped, "No events to analyze."));
@@ -350,7 +351,8 @@ public class AuditSchedulerService : IHostedService, IDisposable
                 (issues, analyzedEventCount) = await _aiAnalysisService.AnalyzeEventsAsync(
                     events,
                     new AuditProgressReporter(ReportProgress),
-                    cancellationToken);
+                    cancellationToken,
+                    models => analysisModels = models);
             }
 
             // Calculate health score
@@ -365,9 +367,15 @@ public class AuditSchedulerService : IHostedService, IDisposable
                 Findings = issues,
                 Metadata = new()
                 {
-                    { "SchemaVersion", JsonSerializer.SerializeToElement(1) },
-                    { "Mode", JsonSerializer.SerializeToElement(AppMode.Extended) },
-                    { "CoverageStatus", JsonSerializer.SerializeToElement("complete") },
+                    { "SchemaVersion", JsonSerializer.SerializeToElement(2) },
+                    { "Mode", JsonSerializer.SerializeToElement(ActiveMode) },
+                    { "AnalysisModels", JsonSerializer.SerializeToElement(analysisModels) },
+                    { "RequestedModel", JsonSerializer.SerializeToElement(requestedModel) },
+                    { "AnalysisCompleted", JsonSerializer.SerializeToElement(true) },
+                    { "ScanReason", JsonSerializer.SerializeToElement(scanReason) },
+                    { "CoverageStatus", JsonSerializer.SerializeToElement(collection.CoverageStatus) },
+                    { "CoverageNotes", JsonSerializer.SerializeToElement(collection.CoverageNotes) },
+                    { "Channels", JsonSerializer.SerializeToElement(collection.Channels) },
                     { "EventCount", JsonSerializer.SerializeToElement(events.Count) },
                     { "AnalyzedEventCount", JsonSerializer.SerializeToElement(analyzedEventCount) },
                     { "FilteredEventCount", JsonSerializer.SerializeToElement(events.Count - analyzedEventCount) },
@@ -384,7 +392,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
             _diagnosticLogService.Write(
                 $"Audit result saved: type={(fastScan ? "fast" : "full")}, events={events.Count}, issues={issues.Count}, elapsedMs={stopwatch.ElapsedMilliseconds}");
             // Update last scan time
-            _lastScanTime = endTime;
+            if (collection.CoverageStatus != "partial") _lastScanTime = endTime;
 
             // Notify UI
             IsScanning = false;
@@ -430,15 +438,24 @@ public class AuditSchedulerService : IHostedService, IDisposable
         }
     }
 
-    internal static DateTime GetScanStart(bool fastScan, DateTime endTime, DateTime lastScanTime, AppSettings settings)
+    internal static DateTime GetScanStart(bool fastScan, DateTime endTime, DateTime lastScanTime, AppSettings settings, int fullScanDays = 1, bool modelUpgrade = false)
     {
-        if (!fastScan) return endTime.AddHours(-24);
+        if (fullScanDays is not (1 or 2 or 7)) throw new ArgumentOutOfRangeException(nameof(fullScanDays));
+        if (lastScanTime > DateTime.MinValue && lastScanTime < endTime && !modelUpgrade) return lastScanTime;
+        if (!fastScan || modelUpgrade)
+        {
+            var baseline = endTime.AddDays(-fullScanDays);
+            return lastScanTime > DateTime.MinValue && lastScanTime < baseline ? lastScanTime : baseline;
+        }
         return settings.FastScanRangeHours > 0 ? endTime.AddHours(-settings.FastScanRangeHours)
-            : lastScanTime == DateTime.MinValue ? endTime.AddHours(-settings.ScanIntervalHours) : lastScanTime;
+            : endTime.AddHours(-settings.ScanIntervalHours);
     }
 
     internal static DateTime GetStoredScanEnd(AuditResult? result, DateTime now)
     {
+        if (result?.Metadata?.TryGetValue("CoverageStatus", out var coverage) == true
+            && (coverage.ValueKind != JsonValueKind.String || coverage.GetString() is not ("complete" or "limited")))
+            return DateTime.MinValue;
         if (result?.Metadata?.TryGetValue("ScanEnd", out var value) == true
             && value.ValueKind == JsonValueKind.String
             && DateTime.TryParse(value.GetString(), System.Globalization.CultureInfo.InvariantCulture,

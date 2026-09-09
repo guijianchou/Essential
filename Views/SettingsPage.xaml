@@ -63,7 +63,7 @@
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                                 <StackPanel Spacing="3">
                                     <TextBlock Text="{Binding [Startupmode], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" FontSize="16" />
-                                    <TextBlock Text="{Binding [ModesuseindependentdatabasesYourAIHubconfigurationandextendedhistoryarepreserved], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    <TextBlock Text="{Binding [AssistanthistoryisseparateExtendedandfullaccessmodessharetheexistingAIHubandhistory], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                     <Button Content="{Binding [Save], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.SaveSettingsCommand}" />
@@ -75,12 +75,14 @@
                                     <StackPanel Spacing="6">
                                         <TextBlock Text="{Binding [Choosehowauditsareproduced], Source={StaticResource AppText}}" Style="{StaticResource SettingTitleStyle}" />
                                         <TextBlock Text="{Binding [AssistantdefaultanordinarydisplaywindowClaudeorCodexcollectsanalyzesandpublishesresultsseparately], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
-                                        <TextBlock Text="{Binding [ExtendedadministratorapprovalthenWindowseventlogsconfiguredAIHubandlocalresults], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        <TextBlock Text="{Binding [ExtendednoelevationSecurityskippedotherWindowslogsconfiguredAIHubandlocalresults], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                        <TextBlock Text="{Binding [FullaccesssameuserUACallfiveWindowslogchannelsincludingSecurityExistingeventandlevelfiltersstillapply], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                     </StackPanel>
                                     <ComboBox Grid.Column="1" Width="180" VerticalAlignment="Center" SelectedIndex="{x:Bind ViewModel.ModeIndex, Mode=TwoWay}"
                                               AutomationProperties.Name="{Binding [Startupmode], Source={StaticResource AppText}}">
                                         <ComboBoxItem Content="{Binding [Assistantmode], Source={StaticResource AppText}}" />
                                         <ComboBoxItem Content="{Binding [Extendedmode], Source={StaticResource AppText}}" />
+                                        <ComboBoxItem Content="{Binding [Fullaccessmode], Source={StaticResource AppText}}" />
                                     </ComboBox>
                                 </Grid>
                             </Border>
@@ -90,7 +92,7 @@
                                         <TextBlock Text="{Binding [Currentlyrunning], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
                                         <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.ActiveModeText, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" />
                                     </Grid>
-                                    <TextBlock Text="{Binding [AfterexitingopentheappnormallyfromFileExplorerExtendedmoderequestsUACAssistantmodecannotinheritadministratorelevation], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
+                                    <TextBlock Text="{Binding [ReopennormallyafterexitingOnlyfullaccessmoderequestsUACAssistantandextendedmodesrunwithoutadministratorelevation], Source={StaticResource AppText}}" Style="{StaticResource SettingDescriptionStyle}" />
                                     <InfoBar IsOpen="{x:Bind ViewModel.IsModeChangePending, Mode=OneWay}" IsClosable="False" Severity="Warning"
                                              Message="{Binding [ModesavedFullyexitandreopentheappnormallyfromFileExplorertoapplyit], Source={StaticResource AppText}}" />
                                 </StackPanel>
@@ -243,7 +245,7 @@
                                                 <TextBox Grid.Row="1" Grid.Column="1" Text="{x:Bind BaseUrl, Mode=TwoWay}" PlaceholderText="https://api.example.com" />
 
                                                 <TextBlock Grid.Row="2" Text="{Binding [APIkey], Source={StaticResource AppText}}" Style="{StaticResource FormLabelStyle}" />
-                                                <PasswordBox Grid.Row="2" Grid.Column="1" PlaceholderText="{Binding [EnterorpastetheAPIkey], Source={StaticResource AppText}}" PasswordChanged="OnTargetPasswordChanged" />
+                                                <PasswordBox Grid.Row="2" Grid.Column="1" Password="{x:Bind ApiKey, Mode=TwoWay}" PlaceholderText="{Binding [EnterorpastetheAPIkey], Source={StaticResource AppText}}" />
 
                                                 <TextBlock Grid.Row="3" Text="{Binding [APImode], Source={StaticResource AppText}}" Style="{StaticResource FormLabelStyle}" />
                                                 <ComboBox Grid.Row="3" Grid.Column="1" MinWidth="260" SelectedIndex="{x:Bind Mode, Mode=TwoWay, Converter={StaticResource ModeToIndexConverter}}">

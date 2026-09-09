@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$OutputPath,
     [string]$FromUtc = '',
     [string]$ToUtc = '',
+    [switch]$IncludeSecurity,
     [ValidateRange(1, 5000)][int]$MaxEventsPerChannel = 2000
 )
 $ErrorActionPreference = 'Stop'
@@ -49,7 +50,11 @@ $fromText = $auditStart.UtcDateTime.ToString('o')
 $toText = $auditEnd.UtcDateTime.ToString('o')
 $timeFilter = "TimeCreated[@SystemTime &gt;= '$fromText' and @SystemTime &lt; '$toText']"
 
-foreach ($logName in 'Security', 'System', 'Application', 'Setup') {
+foreach ($logName in 'Security', 'System', 'Application', 'Setup', 'ForwardedEvents') {
+    if ($logName -eq 'Security' -and -not $IncludeSecurity) {
+        $auditChannels.Add([ordered]@{ LogName = $logName; Status = 'skipped'; EventCount = 0; Reason = 'not_requested' })
+        continue
+    }
     $records = @()
     $channelEvents = [Collections.Generic.List[object]]::new()
     $channelStatus, $reason = 'complete', 'none'
@@ -113,7 +118,7 @@ foreach ($logName in 'Security', 'System', 'Application', 'Setup') {
 }
 
 $document = [ordered]@{
-    SchemaVersion = 1
+    SchemaVersion = 2
     RunId = $auditRunId
     ScanStart = $fromText
     ScanEnd = $toText

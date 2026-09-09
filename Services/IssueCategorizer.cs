@@ -140,6 +140,7 @@ public static class IssueCategorizer
             FirstSeenUtc = issue.FirstSeenUtc,
             LastSeenUtc = issue.LastSeenUtc,
             SupportingEventCount = Math.Max(issue.SupportingEventCount, issue.RelatedEventRefs?.Count ?? 0),
+            EventTimes = new Dictionary<string, DateTime>(issue.EventTimes),
             Category = category,
             Severity = ParseSeverity(issue.Severity)
         };

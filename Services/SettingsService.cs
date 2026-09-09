@@ -69,6 +69,19 @@ public sealed class SettingsService
         - Low: hygiene and awareness items with no direct sign of harm. Examples: password
           change attempts (4723, 4724), isolated firewall blocks, one-off warnings.
 
+        ## Analysis depth
+
+        Match the explanation to the severity instead of giving every event the same generic text.
+
+        - High findings must trace the chronological evidence chain with the relevant event IDs,
+          providers, accounts, sources and times. Separate observed facts from possible causes,
+          then give ordered, safe immediate actions and a concrete check that can confirm or clear
+          the finding. Do not claim that a cause or remediation is proven when the events do not show it.
+        - Medium findings should explain the observed pattern, affected scope and plausible alternatives,
+          followed by specific checks and locations that can confirm or clear the issue.
+        - Low findings should stay concise: state the evidence and give the one most useful routine check.
+          Do not inflate low-risk noise into a high-risk narrative.
+
         ## Category taxonomy
 
         Use exactly one value. Classify by event ID, log name and provider, never by an
@@ -313,7 +326,8 @@ public sealed class SettingsService
     public AppSettings Current { get; private set; }
     // A saved mode change takes effect only in a new process. Never switch a live scanner's database.
     public string ActiveMode { get; }
-    public bool IsAssistantMode => ActiveMode != AppMode.Extended;
+    public bool IsAssistantMode => ActiveMode == AppMode.Assistant;
+    public bool IsFullMode => ActiveMode == AppMode.Full;
     public string AgentInstructionsPath => _agentInstructionsPath;
     public string SettingsPath => _settingsPath;
 
@@ -366,21 +380,11 @@ public sealed class SettingsService
         Normalize(settings);
 
         var json = JsonSerializer.Serialize(settings, SerializerOptions);
-        File.WriteAllText(_settingsPath, json);
-        try
-        {
+        // Do not report success while the policy loaded at restart still contains old text.
+        if (!File.Exists(_agentInstructionsPath)
+            || File.ReadAllText(_agentInstructionsPath) != settings.AgentInstructions)
             File.WriteAllText(_agentInstructionsPath, settings.AgentInstructions);
-        }
-        catch (IOException)
-        {
-            // The JSON settings file remains the source of truth if the optional
-            // human-readable policy copy cannot be written.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // The JSON settings file remains the source of truth if the optional
-            // human-readable policy copy cannot be written.
-        }
+        File.WriteAllText(_settingsPath, json);
         Current = settings;
         AppText.Current.SetLanguage(settings.Language);
         SettingsChanged?.Invoke(this, EventArgs.Empty);
@@ -473,18 +477,16 @@ public sealed class SettingsService
         return CreateDefaultSettings();
     }
 
-    private static AppSettings CreateDefaults()
+    private AppSettings CreateDefaults()
     {
         var endpoint = "https://api.falsemeet.site";
         var apiKey = "";
 
-        foreach (var apiFilePath in GetLegacyApiFilePaths())
+        // User configuration belongs beside settings.json, never beside the executable
+        // or in a working/parent directory chosen by a shortcut or development tool.
+        string apiFilePath = Path.Combine(Path.GetDirectoryName(_settingsPath)!, "API.txt");
+        if (File.Exists(apiFilePath))
         {
-            if (!File.Exists(apiFilePath))
-            {
-                continue;
-            }
-
             try
             {
                 var lines = File.ReadAllLines(apiFilePath);
@@ -498,12 +500,14 @@ public sealed class SettingsService
                 {
                     apiKey = lines[1].Trim();
                 }
-
-                break;
             }
             catch (IOException)
             {
-                // Try the next development-time location.
+                // Keep the built-in defaults when the optional user file is unavailable.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Do not fall back to configuration from another directory.
             }
         }
 
@@ -567,23 +571,6 @@ public sealed class SettingsService
         {
             // Settings can still be edited and saved if the optional copy cannot be created.
         }
-    }
-
-    private static string[] GetLegacyApiFilePaths()
-    {
-        var paths = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "API.txt"),
-            Path.Combine(Directory.GetCurrentDirectory(), "API.txt")
-        }.ToList();
-
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        for (var i = 0; i < 6 && directory != null; i++, directory = directory.Parent)
-        {
-            paths.Add(Path.Combine(directory.FullName, "API.txt"));
-        }
-
-        return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static void Normalize(AppSettings settings)

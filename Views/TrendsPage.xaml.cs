@@ -75,7 +75,7 @@ public sealed partial class TrendsPage : Page
 
     private void ApplyTrendDot()
     {
-        string key = !ViewModel.HasData
+        string key = !ViewModel.HasAssessment
             ? "TextFillColorTertiaryBrush"
             : ViewModel.TrendBand switch
             {

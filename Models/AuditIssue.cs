@@ -26,6 +26,7 @@ public class AuditIssue
     public DateTime FirstSeenUtc { get; set; }
     public DateTime LastSeenUtc { get; set; }
     public int SupportingEventCount { get; set; }
+    public Dictionary<string, DateTime> EventTimes { get; set; } = new();
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string Severity { get; set; } = string.Empty; // High | Medium | Low

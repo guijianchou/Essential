@@ -4,10 +4,10 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>LocalSecurityAudit</RootNamespace>
-    <Version>0.3.4-beta.1</Version>
-    <AssemblyVersion>0.3.4.0</AssemblyVersion>
-    <FileVersion>0.3.4.1</FileVersion>
-    <InformationalVersion>0.3.4 beta1</InformationalVersion>
+    <Version>0.3.7</Version>
+    <AssemblyVersion>0.3.7.0</AssemblyVersion>
+    <FileVersion>0.3.7.0</FileVersion>
+    <InformationalVersion>0.3.7</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x86;x64;ARM64</Platforms>
@@ -17,12 +17,14 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- The existing Win2D and Windows App SDK packages use win10-* runtime assets. -->
+    <UseRidGraph>true</UseRidGraph>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="Assets\**" />
+    <Content Include="Assets\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="AGENTS.md;tools\collect-assistant-events.ps1;tools\publish-assistant-audit.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Resources\Strings.zh-CN.json" WithCulture="false" LogicalName="LocalSecurityAudit.Resources.Strings.zh-CN.json" />
   </ItemGroup>

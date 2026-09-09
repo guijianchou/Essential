@@ -16,9 +16,7 @@ public sealed class DiagnosticLogService
     public DiagnosticLogService(SettingsService settingsService)
     {
         _settingsService = settingsService;
-        var appDataPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LocalSecurityAudit");
+        var appDataPath = Path.GetDirectoryName(settingsService.SettingsPath)!;
 
         Directory.CreateDirectory(appDataPath);
         _logPath = Path.Combine(appDataPath, "diagnostic.log");

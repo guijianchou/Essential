@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Dispatching;
 using LocalSecurityAudit.Services;
@@ -15,7 +15,6 @@ public sealed partial class ScanStep : ObservableObject
     private AuditProgressEventArgs _progress;
     private int _completed;
     private int _total;
-    private long _lastDetailUpdate;
 
     [ObservableProperty]
     private bool showText = true;
@@ -44,14 +43,22 @@ public sealed partial class ScanStep : ObservableObject
     public bool HasConnector => Stage != AuditStage.Complete;
     public bool HasCompletedConnector => HasConnector && IsDone;
     public string Detail => _progress.BatchNumber > 0
-        ? AppText.Format("Batch {0}: {1}", _progress.BatchNumber, _progress.Message) : _progress.Message;
+        ? AppText.Format("Step {0}: {1}", _progress.BatchNumber, _progress.Message) : _progress.Message;
     public string Tooltip => $"{Title} {PercentText}: {Detail}";
     public bool HasBatchProgress => ShowText && _total > 0;
+    public string StatusText => State switch
+    {
+        AuditStepState.Done => AppText.Get("Done"),
+        AuditStepState.Failed => AppText.Get("Failed"),
+        AuditStepState.Skipped => AppText.Get("Skipped"),
+        AuditStepState.Active => _total > 0 ? PercentText : AppText.Get("Active"),
+        _ => AppText.Get("Pending")
+    };
     public double Percent => IsDone ? 100 : _total == 0 ? 0 : Math.Clamp(100d * _completed / _total, 0, 100);
     public string PercentText => IsDone || _total > 0 ? AppText.Format("{0:0}%", Math.Floor(Percent)) : "--";
     public double CompletionFraction => State == AuditStepState.Skipped && (Stage != AuditStage.Translate || _total == 0) ? 1 : Percent / 100;
-    public string BatchText => AppText.Format(Stage == AuditStage.Collect ? "{0}/{1} groups" : "{0}/{1} batches", _completed, _total);
-    public double RowHeight => ShowText ? 88 : 48;
+    public string BatchText => AppText.Format(Stage == AuditStage.Collect ? "{0}/{1} groups" : "{0}/{1} steps", _completed, _total);
+    public double RowHeight => 36;
 
     public bool Update(AuditProgressEventArgs progress)
     {
@@ -60,14 +67,13 @@ public sealed partial class ScanStep : ObservableObject
         int total = progress.TotalBatches > 0 ? progress.TotalBatches : progress.TotalUnits;
         int completed = progress.TotalBatches > 0 ? progress.CompletedBatches : progress.CompletedUnits;
         // Concurrent requests can finish in a different order from their progress reports.
-        if (total > 0 && completed < _completed) return false;
-        long now = Stopwatch.GetTimestamp();
+        if (progress.State == AuditStepState.Active && total > 0 && completed < _completed) return false;
         if (progress.State == AuditStepState.Active && State == progress.State && total == 0
-            && Stopwatch.GetElapsedTime(_lastDetailUpdate, now).TotalMilliseconds < 750) return false;
+            && progress.MessageKey == _progress.MessageKey && progress.BatchNumber == _progress.BatchNumber
+            && progress.Arguments.SequenceEqual(_progress.Arguments)) return false;
         _progress = progress;
         _total = Math.Max(_total, total);
         _completed = IsDone ? _total : Math.Clamp(Math.Max(_completed, completed), 0, _total);
-        _lastDetailUpdate = now;
         Refresh();
         return true;
     }
@@ -75,7 +81,6 @@ public sealed partial class ScanStep : ObservableObject
     public void Reset()
     {
         _completed = _total = 0;
-        _lastDetailUpdate = 0;
         _progress = new(Stage, AuditStepState.Pending, "Pending");
         Refresh();
     }
@@ -95,6 +100,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherQueue? _dispatcher = DispatcherQueue.GetForCurrentThread();
     private bool _hasRun;
     private DateTime? _savedAt;
+    private int _scanVersion;
+    private bool _isDisposed;
 
     public IReadOnlyList<ScanStep> Steps { get; } = Enum.GetValues<AuditStage>().Select(stage => new ScanStep(stage)).ToList();
 
@@ -104,17 +111,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string workflowTitle = string.Empty;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(WorkflowTooltip))]
+    private ScanStep? selectedStep;
+
     public bool IsWorkflowVisible => _hasRun;
     public string SavedText => _savedAt.HasValue ? AppText.Format("Saved at {0:t}", _savedAt.Value) : string.Empty;
     public bool HasSavedResult => _savedAt.HasValue;
     public string PaneToggleText => AppText.Get(IsPaneOpen ? "Collapse sidebar" : "Expand sidebar");
+    public string PaneToggleGlyph => "\uE700";
+    public bool IsWorkflowFailed => Steps.Take(4).Any(step => step.IsFailed);
+    public bool IsTranslationPending => Steps[(int)AuditStage.Translate].IsFailed
+        || Steps[(int)AuditStage.Translate].State == AuditStepState.Skipped
+            && Steps[(int)AuditStage.Translate].CompletionFraction < 1;
+    public string WorkflowGlyph => IsWorkflowFailed ? "\uEA39" : IsTranslationPending ? "\uE7BA"
+        : Steps.Any(step => step.IsActive) ? "\uE895" : _savedAt.HasValue ? "\uE73E" : "\uEA3A";
+    public string WorkflowTooltip => $"{WorkflowTitle} {WorkflowPercentText}\n{SelectedStep?.Tooltip}\n{SavedText}".Trim();
     public double WorkflowPercent => !_hasRun ? 0 : Math.Min(Steps.Any(step => step.IsFailed) ? 99 : 100,
         Math.Floor(100 * Steps.Sum(step => step.CompletionFraction) / Steps.Count));
     public string WorkflowPercentText => AppText.Format("{0:0}%", WorkflowPercent);
     public string WorkflowCountText => AppText.Format("{0}/{1} stages", Steps.Count(step => step.IsDone
         || step.State == AuditStepState.Skipped && step.CompletionFraction == 1), Steps.Count);
     public string WorkflowProgressLabel => AppText.Get("Stage completion");
-    public string ModeText => AppText.Get(_scheduler.IsAssistantMode ? "Assistant mode" : "Extended mode");
+    public string ModeText => AppText.Get(LocalSecurityAudit.Models.AppMode.Label(_scheduler.ActiveMode));
     public string WindowTitle => $"{AppText.Get("Local Security Audit")} · {ModeText}";
 
     public MainViewModel(AuditSchedulerService scheduler)
@@ -126,9 +145,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnProgress(object? sender, AuditProgressEventArgs progress)
     {
+        int version = progress.StartsScan && progress.Stage == AuditStage.Collect && progress.State == AuditStepState.Active
+            ? Interlocked.Increment(ref _scanVersion) : Volatile.Read(ref _scanVersion);
         if (_dispatcher is { HasThreadAccess: false })
-            _dispatcher.TryEnqueue(() => ApplyProgress(progress));
-        else ApplyProgress(progress);
+            _dispatcher.TryEnqueue(() => ApplyCurrentProgress(progress, version));
+        else ApplyCurrentProgress(progress, version);
+    }
+
+    private void ApplyCurrentProgress(AuditProgressEventArgs progress, int version)
+    {
+        // A new scan can start before the previous scan's UI callbacks have drained.
+        if (!_isDisposed && version == Volatile.Read(ref _scanVersion)) ApplyProgress(progress);
     }
 
     internal void ApplyProgress(AuditProgressEventArgs progress)
@@ -137,10 +164,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _hasRun = true;
             _savedAt = null;
-            foreach (var step in Steps) step.Reset();
+            foreach (var scanStep in Steps) scanStep.Reset();
             OnPropertyChanged(nameof(IsWorkflowVisible));
         }
-        if (!Steps[(int)progress.Stage].Update(progress)) return;
+        else if (IsWorkflowFailed) return;
+        var step = Steps[(int)progress.Stage];
+        bool enteringStage = step.State == AuditStepState.Pending && progress.State == AuditStepState.Active;
+        if (!step.Update(progress)) return;
+        if (SelectedStep == null || progress.StartsScan || enteringStage || progress.State == AuditStepState.Failed
+            || progress.Stage == AuditStage.Complete && progress.State == AuditStepState.Done)
+            SelectedStep = step;
         if (progress.Stage == AuditStage.Save && progress.State == AuditStepState.Done)
             _savedAt = progress.Arguments.FirstOrDefault() is DateTime savedAt ? savedAt : DateTime.Now;
         Refresh();
@@ -150,6 +183,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         foreach (var step in Steps) step.ShowText = value;
         OnPropertyChanged(nameof(PaneToggleText));
+        OnPropertyChanged(nameof(PaneToggleGlyph));
     }
 
     private void OnLanguageChanged(object? sender, EventArgs e)
@@ -166,10 +200,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void Refresh()
     {
         OnPropertyChanged(nameof(WindowTitle));
+        OnPropertyChanged(nameof(ModeText));
         WorkflowTitle = AppText.Get(!_hasRun ? string.Empty
-            : Steps.Take(4).Any(step => step.IsFailed) ? "Scan failed"
-            : Steps[(int)AuditStage.Translate].IsFailed ? "Translation pending"
+            : IsWorkflowFailed ? "Scan failed"
+            : IsTranslationPending ? "Translation pending"
+            : Steps[(int)AuditStage.Complete].IsDone ? "Scan complete"
             : _savedAt.HasValue ? "Scan saved" : "Scanning");
+        OnPropertyChanged(nameof(IsWorkflowFailed));
+        OnPropertyChanged(nameof(IsTranslationPending));
+        OnPropertyChanged(nameof(WorkflowGlyph));
+        OnPropertyChanged(nameof(WorkflowTooltip));
         OnPropertyChanged(nameof(SavedText));
         OnPropertyChanged(nameof(HasSavedResult));
         OnPropertyChanged(nameof(PaneToggleText));
@@ -181,6 +221,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _isDisposed = true;
         _scheduler.AuditProgress -= OnProgress;
         AppText.Current.LanguageChanged -= OnLanguageChanged;
     }

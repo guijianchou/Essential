@@ -35,6 +35,13 @@
                         SizeChanged="OnNavigationSizeChanged"
                         PaneOpening="OnPaneOpening"
                         ItemInvoked="NavigationView_ItemInvoked">
+            <NavigationView.PaneHeader>
+                <Grid Height="40" Margin="16,4,0,8">
+                    <TextBlock Text="{x:Bind ViewModel.ModeText, Mode=OneWay}" FontWeight="SemiBold" FontSize="13"
+                               VerticalAlignment="Center" Margin="0,0,16,0" TextTrimming="CharacterEllipsis"
+                               Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}" />
+                </Grid>
+            </NavigationView.PaneHeader>
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="{Binding [Dashboard], Source={StaticResource AppText}}" Tag="dashboard" IsSelected="True">
                     <NavigationViewItem.Icon>
@@ -46,94 +53,106 @@
                         <FontIcon Glyph="&#xE9D9;" FontSize="14" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-            </NavigationView.MenuItems>
-            <NavigationView.PaneFooter>
-                <Grid x:Name="WorkflowHost" RowDefinitions="Auto,*,Auto" Padding="0,12,0,8"
-                      Visibility="{Binding IsWorkflowVisible, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <Grid>
-                        <StackPanel x:Name="WorkflowHeading" Margin="20,0,16,14" Spacing="6"
-                                    Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}">
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <TextBlock Text="{x:Bind ViewModel.WorkflowTitle, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.WorkflowPercentText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" />
-                            </Grid>
-                            <ProgressBar Value="{x:Bind ViewModel.WorkflowPercent, Mode=OneWay}" Minimum="0" Maximum="100" Height="4"
-                                         AutomationProperties.Name="{x:Bind ViewModel.WorkflowProgressLabel, Mode=OneWay}" />
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <TextBlock Text="{x:Bind ViewModel.WorkflowProgressLabel, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.WorkflowCountText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            </Grid>
-                        </StackPanel>
-                        <TextBlock Text="{x:Bind ViewModel.WorkflowPercentText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,14" HorizontalAlignment="Center"
-                                   ToolTipService.ToolTip="{x:Bind ViewModel.WorkflowProgressLabel, Mode=OneWay}"
-                                   Visibility="{Binding IsPaneOpen, Converter={StaticResource InverseBoolToVisibilityConverter}}" />
-                    </Grid>
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <ItemsControl ItemsSource="{x:Bind ViewModel.Steps}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:ScanStep">
-                                    <Grid ColumnDefinitions="48,*" Height="{x:Bind RowHeight, Mode=OneWay}"
-                                          Loaded="OnScanStepLoaded" Unloaded="OnScanStepUnloaded"
-                                          AutomationProperties.Name="{x:Bind Tooltip, Mode=OneWay}"
-                                          ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
-                                        <Grid.Transitions>
-                                            <TransitionCollection>
-                                                <RepositionThemeTransition IsStaggeringEnabled="False" />
-                                            </TransitionCollection>
-                                        </Grid.Transitions>
-                                        <Rectangle Width="2" Margin="0,28,0,0" Fill="{ThemeResource ControlStrongStrokeColorDefaultBrush}"
-                                                   Visibility="{Binding HasConnector, Converter={StaticResource BoolToVisibilityConverter}}" />
-                                        <Rectangle Width="2" Margin="0,28,0,0" Fill="{ThemeResource HealthGoodBrush}"
-                                                   Visibility="{Binding HasCompletedConnector, Converter={StaticResource BoolToVisibilityConverter}}" />
-                                        <Grid Width="24" Height="24" VerticalAlignment="Top">
-                                            <ProgressRing x:Name="ActiveRing" Width="20" Height="20" IsActive="False"
-                                                          Foreground="{ThemeResource HealthWarningBrush}"
-                                                          Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibilityConverter}}" />
-                                            <FontIcon x:Name="StaticActiveIcon" Glyph="&#xE895;" FontSize="16"
-                                                      Foreground="{ThemeResource HealthWarningBrush}" Visibility="Collapsed" />
-                                            <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="{ThemeResource HealthGoodBrush}"
-                                                      Visibility="{Binding IsDone, Converter={StaticResource BoolToVisibilityConverter}}" />
-                                            <FontIcon Glyph="&#xEA39;" FontSize="16" Foreground="{ThemeResource HealthRiskBrush}"
-                                                      Visibility="{Binding IsFailed, Converter={StaticResource BoolToVisibilityConverter}}" />
-                                            <FontIcon Glyph="{x:Bind InactiveGlyph, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                                      Visibility="{Binding IsInactive, Converter={StaticResource BoolToVisibilityConverter}}" />
-                                        </Grid>
-                                        <Grid x:Name="StepText" Grid.Column="1" RowDefinitions="18,32,16" RowSpacing="4" Margin="0,2,20,12"
-                                                    Visibility="{Binding ShowText, Converter={StaticResource BoolToVisibilityConverter}}">
-                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                                <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Grid.Column="1" Text="{x:Bind PercentText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" />
-                                            </Grid>
-                                            <TextBlock Grid.Row="1" Text="{x:Bind Detail, Mode=OneWay}" FontSize="12" TextWrapping="Wrap"
-                                                       LineHeight="16" LineStackingStrategy="BlockLineHeight"
-                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" MaxLines="2" TextTrimming="CharacterEllipsis" />
-                                            <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8"
-                                                  Visibility="{Binding HasBatchProgress, Converter={StaticResource BoolToVisibilityConverter}}">
-                                                <ProgressBar x:Name="BatchProgress" Minimum="0" Maximum="100" Height="3"
-                                                             VerticalAlignment="Center"
-                                                             Foreground="{ThemeResource HealthGoodBrush}" />
-                                                <TextBlock Grid.Column="1" Text="{x:Bind BatchText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                            </Grid>
-                                        </Grid>
+                <NavigationViewItemHeader x:Name="WorkflowHeader"
+                                          Visibility="{Binding IsWorkflowVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <Grid x:Name="WorkflowHost" RowDefinitions="*,Auto,*" Padding="8,0"
+                          Visibility="{Binding IsWorkflowVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <Grid x:Name="WorkflowContent" Grid.Row="1" RowDefinitions="Auto,Auto,Auto,Auto"
+                              Padding="0,0,0,8">
+                            <Grid>
+                                <StackPanel x:Name="WorkflowHeading" Margin="8,8,8,8" Spacing="4"
+                                            Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <Grid Height="20" ColumnDefinitions="16,*,Auto" ColumnSpacing="8">
+                                        <FontIcon x:Name="WorkflowStatusIcon" Glyph="{x:Bind ViewModel.WorkflowGlyph, Mode=OneWay}" FontSize="14" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.WorkflowTitle, Mode=OneWay}" FontSize="13" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ViewModel.WorkflowTooltip, Mode=OneWay}" />
+                                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.WorkflowPercentText, Mode=OneWay}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
                                     </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                    <StackPanel x:Name="WorkflowSummary" Grid.Row="2" Margin="20,10,16,0" Spacing="4"
-                                Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <TextBlock Text="{x:Bind ViewModel.SavedText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource HealthGoodBrush}"
-                                   Visibility="{Binding HasSavedResult, Converter={StaticResource BoolToVisibilityConverter}}" />
-                    </StackPanel>
-                </Grid>
-            </NavigationView.PaneFooter>
+                                    <ProgressBar x:Name="WorkflowProgress" Value="{x:Bind ViewModel.WorkflowPercent, Mode=OneWay}" Minimum="0" Maximum="100" Height="4"
+                                                 AutomationProperties.Name="{x:Bind ViewModel.WorkflowProgressLabel, Mode=OneWay}" />
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <TextBlock Text="{x:Bind ViewModel.WorkflowProgressLabel, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.WorkflowCountText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </Grid>
+                                </StackPanel>
+                                <StackPanel HorizontalAlignment="Center" Spacing="4" Margin="0,8,0,8"
+                                            ToolTipService.ToolTip="{x:Bind ViewModel.WorkflowTooltip, Mode=OneWay}"
+                                            AutomationProperties.Name="{x:Bind ViewModel.WorkflowTooltip, Mode=OneWay}"
+                                            Visibility="{Binding IsPaneOpen, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                                    <FontIcon x:Name="CompactWorkflowStatusIcon" Glyph="{x:Bind ViewModel.WorkflowGlyph, Mode=OneWay}" FontSize="14" />
+                                    <TextBlock Text="{x:Bind ViewModel.WorkflowPercentText, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+                            <ListView x:Name="WorkflowSteps" Grid.Row="1" ItemsSource="{x:Bind ViewModel.Steps}"
+                                      SelectedItem="{x:Bind ViewModel.SelectedStep, Mode=TwoWay}" SelectionMode="Single"
+                                      IsItemClickEnabled="True" ItemClick="OnWorkflowStepClick" Padding="0" Height="216"
+                                      ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                      AutomationProperties.Name="{Binding [Scanstages], Source={StaticResource AppText}}">
+                                <ListView.ItemContainerStyle>
+                                    <Style TargetType="ListViewItem">
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="Margin" Value="4,0" />
+                                        <Setter Property="MinHeight" Value="36" />
+                                        <Setter Property="Height" Value="36" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    </Style>
+                                </ListView.ItemContainerStyle>
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ScanStep">
+                                        <Grid ColumnDefinitions="40,*" Height="{x:Bind RowHeight, Mode=OneWay}"
+                                              Loaded="OnScanStepLoaded" Unloaded="OnScanStepUnloaded"
+                                              AutomationProperties.Name="{x:Bind Tooltip, Mode=OneWay}"
+                                              ToolTipService.ToolTip="{x:Bind Tooltip, Mode=OneWay}">
+                                            <Grid Width="24" Height="24" VerticalAlignment="Center">
+                                                <ProgressRing x:Name="ActiveRing" Width="20" Height="20" IsActive="False"
+                                                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                                              Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                <FontIcon x:Name="StaticActiveIcon" Glyph="&#xE895;" FontSize="16"
+                                                          Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Visibility="Collapsed" />
+                                                <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="{ThemeResource HealthGoodBrush}"
+                                                          Visibility="{Binding IsDone, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                <FontIcon Glyph="&#xEA39;" FontSize="16" Foreground="{ThemeResource HealthRiskBrush}"
+                                                          Visibility="{Binding IsFailed, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                <FontIcon Glyph="{x:Bind InactiveGlyph, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                          Visibility="{Binding IsInactive, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                            </Grid>
+                                            <Grid x:Name="StepText" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,0,12,0" VerticalAlignment="Center"
+                                                  Visibility="{Binding ShowText, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                <TextBlock x:Name="StepTitle" Text="{x:Bind Title, Mode=OneWay}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock x:Name="StepStatus" Grid.Column="1" Text="{x:Bind StatusText, Mode=OneWay}" FontSize="12" />
+                                            </Grid>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <Grid x:Name="WorkflowSummary" Grid.Row="2" RowDefinitions="Auto,Auto,Auto" RowSpacing="6" Margin="8,8,8,4"
+                                  BorderThickness="0,1,0,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" Padding="0,8,0,0"
+                                  Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <TextBlock Text="{x:Bind ViewModel.SelectedStep.Title, Mode=OneWay}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <ScrollViewer x:Name="StepDetailsScroll" Grid.Row="1" MaxHeight="128" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <TextBlock Text="{x:Bind ViewModel.SelectedStep.Detail, Mode=OneWay}" FontSize="12" TextWrapping="Wrap"
+                                               IsTextSelectionEnabled="True" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </ScrollViewer>
+                                <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8"
+                                      Visibility="{Binding SelectedStep.HasBatchProgress, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <ProgressBar x:Name="SelectedStepProgress" Value="{x:Bind ViewModel.SelectedStep.Percent, Mode=OneWay}" Minimum="0" Maximum="100" Height="3" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.SelectedStep.BatchText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Grid>
+                            </Grid>
+                            <StackPanel Grid.Row="3" Margin="8,6,8,0"
+                                        Visibility="{Binding IsPaneOpen, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <TextBlock Text="{x:Bind ViewModel.SavedText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource HealthGoodBrush}"
+                                           Visibility="{Binding HasSavedResult, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </NavigationViewItemHeader>
+            </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Tag="toggle-pane" SelectsOnInvoked="False"
+                <NavigationViewItem Tag="pane" SelectsOnInvoked="False"
                                     ToolTipService.ToolTip="{x:Bind ViewModel.PaneToggleText, Mode=OneWay}"
                                     AutomationProperties.Name="{x:Bind ViewModel.PaneToggleText, Mode=OneWay}">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE700;" FontSize="16" />
-                    </NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon><FontIcon Glyph="{x:Bind ViewModel.PaneToggleGlyph, Mode=OneWay}" FontSize="16" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
             <Frame x:Name="ContentFrame" Margin="0" NavigationFailed="ContentFrame_NavigationFailed" />

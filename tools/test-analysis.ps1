@@ -180,7 +180,9 @@ Test-Case 'Historical database upgrade preserves non-text JSON and refuses stale
     $assemblyDirectory = Split-Path -Parent $assembly.Location
     $null = [System.Reflection.Assembly]::LoadFrom((Join-Path $assemblyDirectory 'Microsoft.Data.Sqlite.dll'))
     $null = [System.Reflection.Assembly]::LoadFrom((Join-Path $assemblyDirectory 'SQLitePCLRaw.batteries_v2.dll'))
-    $null = [System.Runtime.InteropServices.NativeLibrary]::Load((Join-Path $assemblyDirectory 'runtimes/win-x64/native/e_sqlite3.dll'))
+    $sqlitePath = Join-Path $assemblyDirectory 'e_sqlite3.dll'
+    if (-not (Test-Path -LiteralPath $sqlitePath)) { $sqlitePath = Join-Path $assemblyDirectory 'runtimes/win-x64/native/e_sqlite3.dll' }
+    $null = [System.Runtime.InteropServices.NativeLibrary]::Load($sqlitePath)
     [SQLitePCL.Batteries_V2]::Init()
     $connectionString = "Data Source=analysis-regression-$([guid]::NewGuid());Mode=Memory;Cache=Shared;Pooling=False"
     $keeper = [Microsoft.Data.Sqlite.SqliteConnection]::new($connectionString)
@@ -359,7 +361,10 @@ using System.Threading.Tasks;
 public sealed class AnalysisRegressionStream : Stream
 {
     private readonly MemoryStream source;
-    public AnalysisRegressionStream(byte[] data) { source = new MemoryStream(data); }
+    private readonly bool holdOpen;
+    private readonly int chunkBytes;
+    public AnalysisRegressionStream(byte[] data, bool holdOpen, int chunkBytes)
+    { source = new MemoryStream(data); this.holdOpen = holdOpen; this.chunkBytes = chunkBytes; }
     public override bool CanRead => true;
     public override bool CanSeek => false;
     public override bool CanWrite => false;
@@ -368,7 +373,8 @@ public sealed class AnalysisRegressionStream : Stream
     public override int Read(byte[] buffer, int offset, int count) => source.Read(buffer, offset, count);
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
     {
-        if (source.Position < source.Length) return source.Read(buffer.Span);
+        if (source.Position < source.Length) return source.Read(buffer.Span[..Math.Min(buffer.Length, chunkBytes)]);
+        if (!holdOpen) return 0;
         await Task.Delay(Timeout.Infinite, token);
         return 0;
     }
@@ -383,10 +389,16 @@ public sealed class AnalysisRegressionStream : Stream
 '@
 }
 
-function Read-TestStream([object[]]$Events, [string]$Mode = 'responses', [switch]$HoldOpen) {
-    $sse = ($Events | ForEach-Object { 'data: ' + ($_ | ConvertTo-Json -Compress -Depth 8) + "`n`n" }) -join ''
+function New-CompletedResponse([string]$Text = '{"issues":[]}') {
+    return @{id='resp_0123456789abcdef0123456789abcdef'; object='response'; status='completed'; output=@(
+        @{type='message'; role='assistant'; status='completed'; content=@(@{type='output_text'; text=$Text})}
+    )}
+}
+
+function Read-TestStream([object[]]$Events, [string]$Mode = 'responses', [switch]$HoldOpen, [string]$RawSse = '', [int]$ChunkBytes = 4096) {
+    $sse = if ($RawSse) { $RawSse } else { ($Events | ForEach-Object { 'data: ' + ($_ | ConvertTo-Json -Compress -Depth 10) + "`n`n" }) -join '' }
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($sse)
-    $stream = if ($HoldOpen) { [AnalysisRegressionStream]::new($bytes) } else { [System.IO.MemoryStream]::new($bytes) }
+    $stream = [AnalysisRegressionStream]::new($bytes, $HoldOpen.IsPresent, $ChunkBytes)
     $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::OK)
     $response.Content = [System.Net.Http.StreamContent]::new($stream)
     $response.Content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::new('text/event-stream')
@@ -398,23 +410,25 @@ function Read-TestStream([object[]]$Events, [string]$Mode = 'responses', [switch
     finally { $response.Dispose(); $timeout.Dispose() }
 }
 
-Test-Case 'Complete output_text.done returns without waiting for response.completed or socket close' {
+Test-Case 'Only response.completed finishes a Responses stream without waiting for socket close' {
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $result = Read-TestStream @(
         @{type='response.output_text.delta'; delta='{"issues":[]}'},
-        @{type='response.output_text.done'; text='{"issues":[]}'}
+        @{type='response.output_text.done'; text='{"issues":[]}'},
+        @{type='response.completed'; response=(New-CompletedResponse)}
     ) -HoldOpen
     Assert-True ($result.Text -eq '{"issues":[]}' -and $timer.Elapsed.TotalSeconds -lt 2) 'Complete text did not finish promptly.'
 }
 
-Test-Case 'Complete JSON at EOF remains accepted without a terminal marker' {
-    $result = Read-TestStream @(@{type='response.output_text.delta'; delta='{"issues":[]}'})
-    Assert-True ($result.Text -eq '{"issues":[]}') 'Valid EOF result was rejected.'
+Test-Case 'Complete JSON or text done at EOF is not a completed Responses result' {
+    foreach ($type in 'response.output_text.delta', 'response.output_text.done') {
+        Assert-Throws { Read-TestStream @(@{type=$type; delta='{"issues":[]}'; text='{"issues":[]}'}) } ([Net.Http.HttpRequestException])
+    }
 }
 
 Test-Case 'Truncated JSON stays a failure even when the stream reports completion' {
     Assert-Throws {
-        Read-TestStream @(@{type='response.output_text.done'; text='{"issues":['}, @{type='response.completed'})
+        Read-TestStream @(@{type='response.completed'; response=(New-CompletedResponse '{"issues":[')})
     } ([System.Net.Http.HttpRequestException])
 }
 
@@ -422,6 +436,84 @@ Test-Case 'Incomplete response status is rejected' {
     Assert-Throws {
         Read-TestStream @(@{type='response.output_text.delta'; delta='{"issues":[]}'}, @{type='response.incomplete'})
     } ([System.Net.Http.HttpRequestException])
+}
+
+Test-Case 'Text done cannot hide a later failure, cancellation or incomplete response' {
+    foreach ($status in 'failed', 'cancelled', 'incomplete') {
+        Assert-Throws {
+            Read-TestStream @(@{type='response.output_text.done'; text='{"issues":[]}'}, @{type="response.$status"; response=@{status=$status}})
+        } ([Net.Http.HttpRequestException])
+    }
+}
+
+Test-Case 'Completed response output replaces deltas and combines only assistant output_text parts' {
+    $response = New-CompletedResponse
+    $response.output = @(
+        @{type='reasoning'; content=@(@{type='output_text'; text='not the answer'})},
+        @{type='message'; role='assistant'; status='completed'; content=@(@{type='output_text'; text='{"issues":'})},
+        @{type='message'; role='assistant'; status='completed'; content=@(@{type='output_text'; text='[]}'})}
+    )
+    $result = Read-TestStream @(@{type='response.output_text.delta'; delta='stale partial text'}, @{type='response.completed'; response=$response})
+    Assert-True ($result.Text -eq '{"issues":[]}') 'Final response items were duplicated, omitted or mixed with reasoning.'
+    [string]$json = $response | ConvertTo-Json -Compress -Depth 10
+    Assert-True ((Invoke-AnalysisMethod 'ExtractMessageContent' @($json, 'responses')) -eq '{"issues":[]}') 'JSON response did not use the same typed output contract.'
+}
+
+Test-Case 'Responses does not accept a Chat Completions DONE sentinel as completion' {
+    Assert-Throws { Read-TestStream @() -RawSse "data: [DONE]`n`n" } ([Net.Http.HttpRequestException])
+}
+
+Test-Case 'Fragmented UTF8, CRLF, comments and multiline SSE data follow the standard framing' {
+    $text = '{"issues":[{"title":"合成测试文本"}]}'
+    $event = @{type='response.completed'; sequence_number=7; response=(New-CompletedResponse $text)} | ConvertTo-Json -Depth 10
+    $dataLines = ($event -split '\r?\n' | ForEach-Object { 'data: ' + $_ }) -join "`r`n"
+    $sse = ": heartbeat`r`nid: 7`r`nevent: response.completed`r`n$dataLines`r`n`r`n"
+    $result = Read-TestStream @() -RawSse $sse -ChunkBytes 1
+    Assert-True ($result.Text -eq $text) 'SSE framing or fragmented Unicode was corrupted.'
+}
+
+Test-Case 'An unrelated item failure is not mistaken for a response.failed event' {
+    $result = Read-TestStream @(@{type='response.some_tool.failed'}, @{type='response.completed'; response=(New-CompletedResponse)})
+    Assert-True ($result.Text -eq '{"issues":[]}') 'A nonterminal event terminated the response.'
+}
+
+Test-Case 'Refusals are not accepted as empty successful assessments' {
+    $response = New-CompletedResponse
+    $response.output[0].content = @(@{type='refusal'; refusal='synthetic-private-refusal'})
+    Assert-Throws { Read-TestStream @(@{type='response.refusal.done'; refusal='synthetic-private-refusal'}, @{type='response.completed'; response=$response}) } ([Net.Http.HttpRequestException])
+}
+
+Test-Case 'JSON Responses require a completed typed response, not SDK helpers or chat payloads' {
+    foreach ($payload in @(
+        '{"output_text":"{\"issues\":[]}"}',
+        '{"choices":[{"message":{"content":"{\"issues\":[]}"}}]}',
+        '{"object":"response","status":"in_progress","output":[]}',
+        '{"object":"response","status":"completed","output":[]}'
+    )) {
+        Assert-Throws { Invoke-AnalysisMethod 'ExtractMessageContent' @($payload, 'responses') } ([Net.Http.HttpRequestException])
+    }
+}
+
+Test-Case 'Root, v1 and prefixed API bases resolve to one v1 segment without losing prefixes' {
+    foreach ($case in @(
+        @('https://example.invalid', '/v1/responses'),
+        @('https://example.invalid/', '/v1/responses'),
+        @('https://example.invalid/v1', '/v1/responses'),
+        @('https://example.invalid/v1/', '/v1/responses'),
+        @('https://example.invalid/gateway', '/gateway/v1/responses'),
+        @('https://example.invalid/gateway/v1/', '/gateway/v1/responses')
+    )) {
+        $uri = Invoke-AnalysisMethod 'BuildEndpoint' @([uri]$case[0], 'v1/responses')
+        Assert-True ($uri.AbsoluteUri -eq ('https://example.invalid' + $case[1])) 'Base URL normalization changed the endpoint.'
+    }
+}
+
+Test-Case 'Request IDs accept only standard opaque forms, never arbitrary header content' {
+    $id = 'req_0123456789abcdef0123456789abcdef'
+    Assert-True ((Invoke-AnalysisMethod 'GetSafeResponseIdentifier' @($id, 'req_')) -eq $id) 'Standard request ID was lost.'
+    foreach ($bad in @('synthetic-private-value', 'req_synthetic-private-value', 'sk-synthetic-secret', ('req_' + ('a' * 200)))) {
+        Assert-True ((Invoke-AnalysisMethod 'GetSafeResponseIdentifier' @($bad, 'req_')) -eq 'unknown') 'Unsafe header content was exposed.'
+    }
 }
 
 Test-Case 'Remote cancellation is recognized before the stream closes' {
@@ -562,6 +654,53 @@ Test-Case 'Late streaming updates cannot reopen a terminal workflow node' {
     }
 }
 
+Test-Case 'Connection and retry transitions remain visible between batch completions' {
+    $step = [LocalSecurityAudit.ViewModels.ScanStep]::new('Analyze')
+    $batch = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'Batch complete', [object[]]@())
+    $batch.CompletedBatches = 1
+    $batch.TotalBatches = 2
+    $null = $step.Update($batch)
+    foreach ($message in 'Main interrupted; retry in 1s', 'Retrying Main', 'Fallback connected') {
+        $detail = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', $message, [object[]]@())
+        $detail.BatchNumber = 1
+        $null = $step.Update($detail)
+        Assert-True ($step.Detail.EndsWith($message) -and $step.Percent -eq 50 -and $step.IsActive) 'A connection transition was lost or counted as completed work.'
+    }
+}
+
+Test-Case 'Terminal failure wins over an older batch-count snapshot' {
+    $step = [LocalSecurityAudit.ViewModels.ScanStep]::new('Analyze')
+    $batch = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'Batch complete', [object[]]@())
+    $batch.CompletedBatches = 2
+    $batch.TotalBatches = 3
+    $null = $step.Update($batch)
+    $failed = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Failed', 'Connection failed', [object[]]@())
+    $failed.CompletedBatches = 1
+    $failed.TotalBatches = 3
+    $null = $step.Update($failed)
+    Assert-True ($step.IsFailed -and -not $step.IsActive -and $step.Percent -gt 66) 'A stale counter suppressed the terminal failure or discarded completed work.'
+}
+
+Test-Case 'A failed scan cannot be completed by late progress from another stage' {
+    $type = $assembly.GetType('LocalSecurityAudit.ViewModels.MainViewModel', $true)
+    $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
+    $steps = [Collections.Generic.List[LocalSecurityAudit.ViewModels.ScanStep]]::new()
+    foreach ($stage in [Enum]::GetValues([LocalSecurityAudit.Services.AuditStage])) { $steps.Add([LocalSecurityAudit.ViewModels.ScanStep]::new($stage)) }
+    $type.GetField('<Steps>k__BackingField', $privateFlags).SetValue($model, $steps)
+    $apply = $type.GetMethod('ApplyProgress', $privateFlags)
+    $start = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Reading', [object[]]@())
+    $start.StartsScan = $true
+    $null = $apply.Invoke($model, @($start))
+    $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Failed', 'Failure', [object[]]@())))
+    $percent = $model.WorkflowPercent
+    foreach ($stage in 'Route', 'Analyze', 'Save', 'Translate', 'Complete') {
+        $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new($stage, 'Done', 'Late completion', [object[]]@())))
+    }
+    Assert-True ($steps[2].IsFailed -and -not $model.HasSavedResult -and $model.WorkflowPercent -eq $percent) 'Late progress marked a failed scan as saved or advanced its progress.'
+    $null = $apply.Invoke($model, @($start))
+    Assert-True ($steps[0].IsActive -and -not $steps[2].IsFailed -and $model.WorkflowPercent -eq 0) 'An explicit new scan did not reset the failure.'
+}
+
 Test-Case 'Concurrent stream details identify their batch without moving aggregate progress' {
     $step = [LocalSecurityAudit.ViewModels.ScanStep]::new('Analyze')
     $detail = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'Waiting for {0} ({1:0}s)', [object[]]@('Main', 15))
@@ -575,6 +714,28 @@ Test-Case 'Concurrent stream details identify their batch without moving aggrega
     Assert-True ($step.Update($completed) -and $step.Percent -gt 33 -and $step.RowHeight -eq $height) 'Throttling dropped a batch completion or changed row height.'
     $step.ShowText = $false
     Assert-True ($step.IsActive -and $step.Percent -gt 33 -and -not $step.HasBatchProgress) 'Collapsing the sidebar lost scan state.'
+}
+
+Test-Case 'Queued history completion from a previous scan cannot finish a new scan' {
+    $type = $assembly.GetType('LocalSecurityAudit.ViewModels.MainViewModel', $true)
+    $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
+    $steps = [Collections.Generic.List[LocalSecurityAudit.ViewModels.ScanStep]]::new()
+    foreach ($stage in [Enum]::GetValues([LocalSecurityAudit.Services.AuditStage])) { $steps.Add([LocalSecurityAudit.ViewModels.ScanStep]::new($stage)) }
+    $type.GetField('<Steps>k__BackingField', $privateFlags).SetValue($model, $steps)
+    $receive = $type.GetMethod('OnProgress', $privateFlags)
+    $start = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Reading', [object[]]@())
+    $start.StartsScan = $true
+    $null = $receive.Invoke($model, @($null, $start))
+    $version = $type.GetField('_scanVersion', $privateFlags).GetValue($model)
+    $null = $receive.Invoke($model, @($null, $start))
+    $drain = $type.GetMethod('ApplyCurrentProgress', $privateFlags)
+    foreach ($stage in 'Translate', 'Complete') {
+        $late = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new($stage, 'Done', 'Old scan complete', [object[]]@())
+        $null = $drain.Invoke($model, @($late, $version))
+    }
+    Assert-True ($steps[0].IsActive -and $steps[4].IsInactive -and $steps[5].IsInactive -and $model.WorkflowPercent -eq 0) 'Queued old history work advanced the new scan.'
+    $null = $receive.Invoke($model, @($null, [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Done', 'Collected', [object[]]@())))
+    Assert-True $steps[0].IsDone 'Current scan progress was dropped with stale callbacks.'
 }
 
 Test-Case 'The sidebar stays hidden until a scan starts and retains its saved result afterward' {
@@ -631,7 +792,9 @@ Test-Case 'Every workflow node uses equal spacing in expanded and compact modes'
 foreach ($language in 'zh-CN', 'en') {
     Test-Case "Chart fonts cover localized day labels, categories and tooltip text in $language" {
         $assemblyDirectory = Split-Path -Parent $assembly.Location
-        $null = [System.Runtime.InteropServices.NativeLibrary]::Load((Join-Path $assemblyDirectory 'runtimes/win-x64/native/libSkiaSharp.dll'))
+        $skiaPath = Join-Path $assemblyDirectory 'libSkiaSharp.dll'
+        if (-not (Test-Path -LiteralPath $skiaPath)) { $skiaPath = Join-Path $assemblyDirectory 'runtimes/win-x64/native/libSkiaSharp.dll' }
+        $null = [System.Runtime.InteropServices.NativeLibrary]::Load($skiaPath)
         $previousLanguage = [LocalSecurityAudit.Services.AppText]::Current.Language
         $paint = $null
         $numbers = $null
@@ -699,7 +862,7 @@ Test-Case 'Security allowlist covers audit changes and splits XPath queries with
     }
 }
 
-Test-Case 'Full scans remain exactly 24 hours while fast scans retain their existing range' {
+Test-Case 'Both scan buttons resume the cursor; only model upgrades reanalyze the selected range' {
     $type = $assembly.GetType('LocalSecurityAudit.Services.AuditSchedulerService', $true)
     $method = $type.GetMethod('GetScanStart', $privateFlags)
     $now = [datetime]::new(2026, 9, 7, 12, 0, 0, [DateTimeKind]::Utc)
@@ -708,10 +871,22 @@ Test-Case 'Full scans remain exactly 24 hours while fast scans retain their exis
     $config.ScanIntervalHours = 4
     $config.FastScanRangeHours = 2
     $last = $now.AddMinutes(-20)
-    Assert-True ($method.Invoke($null, @($false, $now, $last, $config)) -eq $now.AddHours(-24)) 'Full scan range changed with history retention or fast-scan settings.'
-    Assert-True ($method.Invoke($null, @($true, $now, $last, $config)) -eq $now.AddHours(-2)) 'Fixed fast range changed.'
+    $dashboardType = $assembly.GetType('LocalSecurityAudit.ViewModels.DashboardViewModel', $true)
+    $dashboard = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($dashboardType)
+    foreach ($range in @(@(0, 1), @(1, 2), @(2, 7))) {
+        $dashboard.FullScanRangeIndex = $range[0]
+        Assert-True ($dashboard.FullScanDays -eq $range[1]) 'A dropdown selection maps to the wrong day range.'
+        foreach ($fast in $false, $true) {
+            Assert-True ($method.Invoke($null, @($fast, $now, $last, $config, $dashboard.FullScanDays, $false)) -eq $last) 'Same or lower model did not resume incrementally.'
+            Assert-True ($method.Invoke($null, @($fast, $now, $last, $config, $dashboard.FullScanDays, $true)) -eq $now.AddDays(-$range[1])) 'Upgrade did not reanalyze the selected UTC range.'
+        }
+    }
     $config.FastScanRangeHours = 0
-    Assert-True ($method.Invoke($null, @($true, $now, $last, $config)) -eq $last) 'Incremental fast range changed.'
+    Assert-True ($method.Invoke($null, @($true, $now, $last, $config, 7, $false)) -eq $last) 'Incremental fast range changed.'
+    Assert-True ($method.Invoke($null, @($false, $now, $now.AddDays(-9), $config, 7, $true)) -eq $now.AddDays(-9)) 'Upgrade skipped an older unscanned gap.'
+    foreach ($invalid in -1, 0, 3, 8) {
+        Assert-Throws { $method.Invoke($null, @($false, $now, $last, $config, $invalid, $false)) } ([ArgumentOutOfRangeException])
+    }
 }
 
 Test-Case 'Kernel-Power survives filtering and leads analysis before routine events' {
@@ -819,6 +994,97 @@ Test-Case 'Workflow exposes confirmed percentages and resets only on a new scan'
     Assert-True ($model.WorkflowPercent -eq 0 -and -not $model.HasSavedResult) 'New scan retained completion progress.'
     $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Failed', 'Failure', [object[]]@())))
     Assert-True ($model.WorkflowPercent -lt 100) 'Failed scan was presented as complete.'
+}
+
+Test-Case 'Sidebar follows stage transitions without interrupting manual inspection within a stage' {
+    $type = $assembly.GetType('LocalSecurityAudit.ViewModels.MainViewModel', $true)
+    $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
+    $steps = [Collections.Generic.List[LocalSecurityAudit.ViewModels.ScanStep]]::new()
+    foreach ($stage in [Enum]::GetValues([LocalSecurityAudit.Services.AuditStage])) { $steps.Add([LocalSecurityAudit.ViewModels.ScanStep]::new($stage)) }
+    $type.GetField('<Steps>k__BackingField', $privateFlags).SetValue($model, $steps)
+    $apply = $type.GetMethod('ApplyProgress', $privateFlags)
+    $start = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Reading', [object[]]@())
+    $start.StartsScan = $true
+    $null = $apply.Invoke($model, @($start))
+    Assert-True ($model.SelectedStep -eq $steps[0]) 'A new scan did not select collection.'
+    $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Done', 'Read complete', [object[]]@())))
+    $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'Analyzing', [object[]]@())))
+    Assert-True ($model.SelectedStep -eq $steps[2]) 'Entering analysis did not select its details.'
+    $model.SelectedStep = $steps[0]
+    $batch = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Active', 'Batch complete', [object[]]@())
+    $batch.CompletedBatches = 2
+    $batch.TotalBatches = 4
+    $null = $apply.Invoke($model, @($batch))
+    Assert-True ($model.SelectedStep -eq $steps[0]) 'Batch progress interrupted manual inspection.'
+    $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Analyze', 'Failed', 'Synthetic timeout', [object[]]@())))
+    Assert-True ($model.SelectedStep -eq $steps[2] -and $steps[2].Percent -eq 50 -and $model.IsWorkflowFailed) 'Failure did not reveal its details and preserve completed batches.'
+    $null = $apply.Invoke($model, @($batch))
+    Assert-True ($steps[2].IsFailed -and $steps[2].Detail -eq 'Synthetic timeout') 'Late batch progress hid the failure.'
+    $null = $apply.Invoke($model, @($start))
+    Assert-True ($model.SelectedStep -eq $steps[0] -and -not $model.IsWorkflowFailed) 'Retry retained the previous failure selection.'
+    foreach ($stage in 'Collect', 'Route', 'Analyze', 'Save', 'Translate', 'Complete') {
+        $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new($stage, 'Done', 'Done', [object[]]@())))
+    }
+    Assert-True ($model.SelectedStep -eq $steps[5] -and $model.WorkflowTitle -eq [LocalSecurityAudit.Services.AppText]::Get('Scan complete')) 'Completion did not select the final summary.'
+}
+
+Test-Case 'Sidebar distinguishes partial translation from a fully completed scan' {
+    $type = $assembly.GetType('LocalSecurityAudit.ViewModels.MainViewModel', $true)
+    $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
+    $steps = [Collections.Generic.List[LocalSecurityAudit.ViewModels.ScanStep]]::new()
+    foreach ($stage in [Enum]::GetValues([LocalSecurityAudit.Services.AuditStage])) { $steps.Add([LocalSecurityAudit.ViewModels.ScanStep]::new($stage)) }
+    $type.GetField('<Steps>k__BackingField', $privateFlags).SetValue($model, $steps)
+    $apply = $type.GetMethod('ApplyProgress', $privateFlags)
+    $start = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Collect', 'Active', 'Reading', [object[]]@())
+    $start.StartsScan = $true
+    foreach ($hasPendingTranslation in $true, $false) {
+        $null = $apply.Invoke($model, @($start))
+        foreach ($stage in 'Collect', 'Route', 'Analyze', 'Save') {
+            $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new($stage, 'Done', 'Done', [object[]]@())))
+        }
+        $translation = [LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Translate', 'Skipped', 'Translation status', [object[]]@())
+        if ($hasPendingTranslation) {
+            $translation.CompletedBatches = 1
+            $translation.TotalBatches = 3
+        }
+        $null = $apply.Invoke($model, @($translation))
+        $null = $apply.Invoke($model, @([LocalSecurityAudit.Services.AuditProgressEventArgs]::new('Complete', 'Done', 'Done', [object[]]@())))
+        Assert-True ($model.HasSavedResult -and -not $model.IsWorkflowFailed) 'Historical translation changed the saved audit state.'
+        Assert-True ($model.IsTranslationPending -eq $hasPendingTranslation) 'Skipped translation was classified incorrectly.'
+        if ($hasPendingTranslation) {
+            Assert-True ($model.WorkflowPercent -lt 100 -and $model.WorkflowTitle -eq [LocalSecurityAudit.Services.AppText]::Get('Translation pending')) 'Untranslated batches appeared complete.'
+        }
+        else { Assert-True ($model.WorkflowPercent -eq 100) 'An unnecessary translation stage prevented completion.' }
+    }
+}
+
+Test-Case 'Language refresh notifies both the window title and the sidebar mode label' {
+    $type = $assembly.GetType('LocalSecurityAudit.ViewModels.MainViewModel', $true)
+    $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
+    $steps = [Collections.Generic.List[LocalSecurityAudit.ViewModels.ScanStep]]::new()
+    foreach ($stage in [Enum]::GetValues([LocalSecurityAudit.Services.AuditStage])) { $steps.Add([LocalSecurityAudit.ViewModels.ScanStep]::new($stage)) }
+    $type.GetField('<Steps>k__BackingField', $privateFlags).SetValue($model, $steps)
+    $schedulerType = $assembly.GetType('LocalSecurityAudit.Services.AuditSchedulerService', $true)
+    $scheduler = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($schedulerType)
+    $schedulerType.GetField('_settingsService', $privateFlags).SetValue($scheduler, $settingsService)
+    $type.GetField('_scheduler', $privateFlags).SetValue($model, $scheduler)
+    $notifications = [Collections.Generic.List[string]]::new()
+    $handler = [ComponentModel.PropertyChangedEventHandler]{ param($sender, $eventArgs) $notifications.Add($eventArgs.PropertyName) }
+    $model.add_PropertyChanged($handler)
+    $previousLanguage = [LocalSecurityAudit.Services.AppText]::Current.Language
+    try {
+        foreach ($language in 'zh-CN', 'en') {
+            [LocalSecurityAudit.Services.AppText]::Current.SetLanguage($language)
+            $notifications.Clear()
+            $null = $type.GetMethod('OnLanguageChanged', $privateFlags).Invoke($model, @($null, [EventArgs]::Empty))
+            Assert-True ($notifications.Contains('ModeText') -and $notifications.Contains('WindowTitle')) 'The sidebar mode label missed its language change notification.'
+            Assert-True ($model.ModeText -eq [LocalSecurityAudit.Services.AppText]::Get('Extended mode') -and $model.WindowTitle.Contains($model.ModeText)) 'Window and sidebar mode names disagree.'
+        }
+    }
+    finally {
+        $model.remove_PropertyChanged($handler)
+        [LocalSecurityAudit.Services.AppText]::Current.SetLanguage($previousLanguage)
+    }
 }
 
 Test-Case 'Supported models survive normalization and use 256k without changing effort' {

@@ -58,7 +58,10 @@ public partial class TrendsViewModel : ObservableObject, IDisposable
     public bool IsSevenDays => WindowDays == 7;
     public bool IsThirtyDays => WindowDays == 30;
 
-    [ObservableProperty] private List<TrendDay> trendDays = new();
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAssessment))]
+    private List<TrendDay> trendDays = new();
+    public bool HasAssessment => TrendDays.Any(day => day.Health.HasValue);
     [ObservableProperty] private List<CategoryTotal> categoryTotals = new();
     [ObservableProperty] private List<HistoryFinding> visibleFindings = new();
     [ObservableProperty] private bool hasData;

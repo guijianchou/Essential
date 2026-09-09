@@ -37,6 +37,9 @@ public sealed partial class FindingDetailsDialog : ContentDialog
             ? issue.EvidenceTimeText : issue.EventTimestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", AppText.Culture));
         AddEvidence("Related events", issue.OccurrenceSummaryText);
         AddEvidence("Observation range", issue.EvidenceTimeText);
+        AddEvidence("Occurrence timeline", issue.EventTimes.Count == 0 ? AppText.Get("Individual event times were not stored.")
+            : string.Join(Environment.NewLine, issue.EventTimes.Values.GroupBy(time => time.ToLocalTime().Date).OrderBy(group => group.Key)
+                .Select(group => AppText.Format("{0:yyyy-MM-dd}: {1} supporting events", group.Key, group.Count()))));
 
         InitializeComponent();
         XamlRoot = root;

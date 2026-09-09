@@ -34,7 +34,7 @@ public partial class SettingsViewModel : ObservableObject
 
     public bool IsAssistantMode => _settingsService.IsAssistantMode;
     public bool IsExtendedMode => !IsAssistantMode;
-    public string ActiveModeText => AppText.Get(IsAssistantMode ? "Assistant mode" : "Extended mode");
+    public string ActiveModeText => AppText.Get(AppMode.Label(_settingsService.ActiveMode));
     public string DatabasePath => _storageService.DatabasePath;
     public string AssistantDatabasePath => DataStorageService.GetDatabasePath(AppMode.Assistant);
     public string AssistantGuidePath => Path.Combine(AppContext.BaseDirectory, "AGENTS.md");
@@ -167,6 +167,7 @@ public partial class SettingsViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            _diagnosticLogService.WriteException("Settings save failed", ex);
             ShowStatus(InfoBarSeverity.Error, AppText.Format("Save failed: {0}", ex.Message));
         }
         finally
@@ -208,7 +209,7 @@ public partial class SettingsViewModel : ObservableObject
     private void CopyAssistantPrompt()
     {
         var data = new DataPackage();
-        data.SetText(AppText.Format("Read {0} and perform one assistant-mode audit of the past 24 hours. Use the documented collection and validated publish workflow. Write only to {1}. Do not start subagents, change system settings, or call the app's AI Hub. Record unavailable logs honestly. Ask before any additional Windows elevation.",
+        data.SetText(AppText.Format("Read {0} and perform one assistant audit using shared progress and the actual model. Use a seven-day baseline initially or on model upgrade, otherwise continue incrementally. Split the baseline into adjacent daily batches. Skip Security. Validate before publishing to {1}. Do not start subagents, change system settings, elevate, or call the app's AI Hub.",
             AssistantGuidePath, AssistantDatabasePath));
         try
         {
@@ -491,7 +492,9 @@ public partial class SettingsViewModel : ObservableObject
             2 => AppText.Get("the past 4 hours"),
             _ => AppText.Get("everything since the last scan")
         };
-        PipelineCollectText = AppText.Format("Security, System, Application and Setup logs, including Critical events and firewall audits from Security. Fast scans cover {0}; full scans cover 24 hours.", window);
+        PipelineCollectText = AppText.Format(_settingsService.IsFullMode
+            ? "All five Windows log channels, including Security. Incremental progress is shared across modes; higher models reanalyze the selected range. Initial fast range: {0}."
+            : "Application, Setup, System and Forwarded Events; Security skipped. Shared incremental progress; higher models reanalyze the selected range. Initial fast range: {0}.", window);
 
         string parallel = settings.MaxConcurrentAnalysis > 1
             ? AppText.Format("up to {0} requests in parallel", settings.MaxConcurrentAnalysis)
@@ -528,7 +531,7 @@ public partial class SettingsViewModel : ObservableObject
 
     private void LoadFromSettings(AppSettings settings)
     {
-        ModeIndex = settings.Mode == AppMode.Extended ? 1 : 0;
+        ModeIndex = settings.Mode switch { AppMode.Full => 2, AppMode.Extended => 1, _ => 0 };
         LanguageIndex = settings.Language == "zh-CN" ? 1 : 0;
         AutoScanEnabled = settings.AutoScanEnabled;
         MinimizeToTray = settings.MinimizeToTray;
@@ -612,7 +615,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         return new AppSettings
         {
-            Mode = ModeIndex == 1 ? AppMode.Extended : AppMode.Assistant,
+            Mode = ModeIndex switch { 2 => AppMode.Full, 1 => AppMode.Extended, _ => AppMode.Assistant },
             Language = LanguageIndex == 1 ? "zh-CN" : "en",
             Theme = ThemeIndex switch
             {

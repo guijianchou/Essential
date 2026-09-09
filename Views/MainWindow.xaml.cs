@@ -9,7 +9,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Hosting;
-using Microsoft.UI.Xaml.Media.Animation;
 using LocalSecurityAudit.Helpers;
 using LocalSecurityAudit.Services;
 using LocalSecurityAudit.ViewModels;
@@ -48,6 +47,7 @@ public sealed partial class MainWindow : Window
         _schedulerService = schedulerService;
         InitializeComponent();
         Root.DataContext = ViewModel;
+        ViewModel.PropertyChanged += OnWorkflowPropertyChanged;
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
@@ -119,13 +119,17 @@ public sealed partial class MainWindow : Window
     {
         ApplyInitialBounds();
         ApplyTitleBarTheme(Root.ActualTheme);
+        ApplyLanguage();
+        UpdateWorkflowPresentation();
         InitializeTrayIcon();
     }
 
     private void OnNavigationSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // Native PaneFooter precedes the footer menu; reserve two navigation rows and two footer rows.
-        if (WorkflowHost != null) WorkflowHost.Height = Math.Max(160, e.NewSize.Height - 184);
+        // The workflow lives in the menu area; give it the available middle space so
+        // navigation and the footer command remain visible while the content stays centered.
+        if (WorkflowHost != null) WorkflowHost.Height = Math.Clamp(e.NewSize.Height - 224, 360, 560);
+        if (StepDetailsScroll != null) StepDetailsScroll.MaxHeight = Math.Clamp(e.NewSize.Height - 576, 32, 128);
     }
 
     private void OnPaneOpening(NavigationView sender, object args)
@@ -168,6 +172,35 @@ public sealed partial class MainWindow : Window
         finally { _isPaneToggling = false; }
     }
 
+    private async void OnPaneToggleClick(object sender, RoutedEventArgs e) => await TogglePaneAsync();
+
+    private void OnWorkflowStepClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is ScanStep step) ViewModel.SelectedStep = step;
+        ViewModel.IsPaneOpen = true;
+    }
+
+    private void OnWorkflowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.SelectedStep)) StepDetailsScroll.ChangeView(0, 0, null, true);
+        if (e.PropertyName is nameof(MainViewModel.WorkflowTitle) or nameof(MainViewModel.SelectedStep)
+            or nameof(MainViewModel.WorkflowPercent)) UpdateWorkflowPresentation();
+    }
+
+    private void UpdateWorkflowPresentation()
+    {
+        string? key = ViewModel.IsWorkflowFailed ? "HealthRiskBrush" : ViewModel.IsTranslationPending ? "SeverityMediumTextBrush"
+            : !ViewModel.Steps.Any(step => step.IsActive) && ViewModel.HasSavedResult ? "HealthGoodBrush" : null;
+        if (key != null) WorkflowProgress.Foreground = ThemeResources.GetBrush(Root, key);
+        else WorkflowProgress.ClearValue(Control.ForegroundProperty);
+        WorkflowStatusIcon.Foreground = WorkflowProgress.Foreground;
+        CompactWorkflowStatusIcon.Foreground = WorkflowProgress.Foreground;
+        string? selectedKey = ViewModel.SelectedStep?.IsFailed == true ? "HealthRiskBrush"
+            : ViewModel.SelectedStep?.IsDone == true ? "HealthGoodBrush" : null;
+        if (selectedKey != null) SelectedStepProgress.Foreground = ThemeResources.GetBrush(Root, selectedKey);
+        else SelectedStepProgress.ClearValue(Control.ForegroundProperty);
+    }
+
     private void AnimateStepEntry(FrameworkElement element)
     {
         if (!_uiSettings.AnimationsEnabled) return;
@@ -191,48 +224,38 @@ public sealed partial class MainWindow : Window
     {
         if (sender is not FrameworkElement element || element.DataContext is not ScanStep step
             || _releaseStepBindings.ContainsKey(element)) return;
-        var meter = (ProgressBar)element.FindName("BatchProgress");
         var ring = (ProgressRing)element.FindName("ActiveRing");
         var staticIcon = (FontIcon)element.FindName("StaticActiveIcon");
+        var title = (TextBlock)element.FindName("StepTitle");
+        var status = (TextBlock)element.FindName("StepStatus");
         var previousState = step.State;
-        double previousPercent = step.Percent;
-        Storyboard? animation = null;
-        meter.Value = step.Percent;
 
         void UpdatePresentation()
         {
             bool motion = _uiSettings.AnimationsEnabled;
             ring.IsActive = step.IsActive && motion;
-            meter.Foreground = ThemeResources.GetBrush(element, step.IsFailed ? "HealthRiskBrush"
-                : step.IsDone ? "HealthGoodBrush" : "HealthWarningBrush");
+            status.Foreground = step.IsFailed ? ThemeResources.GetBrush(element, "HealthRiskBrush")
+                : step.IsDone ? ThemeResources.GetBrush(element, "HealthGoodBrush")
+                : step.IsActive ? staticIcon.Foreground : title.Foreground;
+            title.FontWeight = step.IsActive || step.IsFailed ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
             staticIcon.Visibility = step.IsActive && !motion ? Visibility.Visible : Visibility.Collapsed;
             if (previousState != step.State)
             {
                 previousState = step.State;
                 if (step.State != AuditStepState.Pending) AnimateStepEntry(element);
             }
-            if (previousPercent == step.Percent) return;
-            previousPercent = step.Percent;
-            double from = meter.Value;
-            animation?.Stop();
-            meter.Value = step.Percent;
-            // Only confirmed batch counts animate; resets and disabled motion update immediately.
-            if (!motion || step.Percent <= from) return;
-            var tween = new DoubleAnimation
-            {
-                From = from, To = step.Percent, Duration = new Duration(TimeSpan.FromMilliseconds(220)),
-                EnableDependentAnimation = true, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            };
-            Storyboard.SetTarget(tween, meter);
-            Storyboard.SetTargetProperty(tween, "Value");
-            animation = new Storyboard { FillBehavior = FillBehavior.Stop };
-            animation.Children.Add(tween);
-            animation.Begin();
         }
 
         PropertyChangedEventHandler changed = (_, _) => UpdatePresentation();
+        void ThemeChanged(FrameworkElement sender, object args) => UpdatePresentation();
         step.PropertyChanged += changed;
-        _releaseStepBindings[element] = () => { step.PropertyChanged -= changed; animation?.Stop(); ring.IsActive = false; };
+        element.ActualThemeChanged += ThemeChanged;
+        _releaseStepBindings[element] = () =>
+        {
+            step.PropertyChanged -= changed;
+            element.ActualThemeChanged -= ThemeChanged;
+            ring.IsActive = false;
+        };
         UpdatePresentation();
     }
 
@@ -241,7 +264,7 @@ public sealed partial class MainWindow : Window
         if (sender is FrameworkElement element && _releaseStepBindings.Remove(element, out var release)) release();
     }
 
-    private async void NavigationView_ItemInvoked(
+    private void NavigationView_ItemInvoked(
         NavigationView sender,
         NavigationViewItemInvokedEventArgs args)
     {
@@ -266,8 +289,8 @@ public sealed partial class MainWindow : Window
 
         switch (item.Tag?.ToString())
         {
-            case "toggle-pane":
-                await TogglePaneAsync();
+            case "pane":
+                _ = TogglePaneAsync();
                 break;
             case "dashboard":
                 NavigateIfNeeded(typeof(DashboardPage), item);
@@ -297,6 +320,7 @@ public sealed partial class MainWindow : Window
     private void OnActualThemeChanged(FrameworkElement sender, object args)
     {
         ApplyTitleBarTheme(Root.ActualTheme);
+        UpdateWorkflowPresentation();
     }
 
     private void ApplyLanguage()
@@ -308,7 +332,11 @@ public sealed partial class MainWindow : Window
         if (FindMenuItem("trends") is { } trendsItem)
             trendsItem.Content = AppText.Get("Trends");
         if (AppNavigation.SettingsItem is NavigationViewItem settingsItem)
+        {
             settingsItem.Content = AppText.Get("Settings");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(settingsItem, AppText.Get("Settings"));
+            ToolTipService.SetToolTip(settingsItem, AppText.Get("Settings"));
+        }
     }
 
     private void OnLanguageChanged(object? sender, EventArgs e)
@@ -426,6 +454,7 @@ public sealed partial class MainWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         _isClosed = true;
+        ViewModel.PropertyChanged -= OnWorkflowPropertyChanged;
         ViewModel.Dispose();
         foreach (var release in _releaseStepBindings.Values) release();
         _releaseStepBindings.Clear();
