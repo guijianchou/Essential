@@ -15,7 +15,6 @@ public sealed partial class AiAnalysisService
         IProgress<AuditProgressEventArgs>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        _settingsService.EnsureExtendedMode();
         var groups = findings.Where(issue => !issue.HasBilingualText)
             .GroupBy(issue => JsonSerializer.Serialize(new
             {
@@ -64,13 +63,13 @@ public sealed partial class AiAnalysisService
                     })
                 });
                 var requestProgress = new AuditProgressReporter(value => progress?.Report(
-                    new(AuditStage.Translate, AuditStepState.Active, value.MessageKey, value.Arguments) { BatchNumber = batchIndex + 1 }));
+                    new(AuditStage.Translate, AuditStepState.Active, value.MessageKey, value.Arguments)
+                    {
+                        BatchNumber = batchIndex + 1, RequestId = value.RequestId, HasTokenUsage = value.HasTokenUsage,
+                        InputTokens = value.InputTokens, OutputTokens = value.OutputTokens
+                    }));
                 var response = await SendAnalysisRequestAsync(routes, prompt, input, routeState, requestProgress, cancellationToken);
-                if (!response.IsSuccessStatusCode)
-                    throw new InvalidOperationException(AppText.Get("Historical translation failed. It will retry after the next scan."));
-
-                var translated = ParseIssuesPayload(response.IsStreaming
-                    ? response.Text : ExtractMessageContent(response.Text, response.Mode));
+                var translated = ParseIssuesPayload(response.Text);
                 ApplyLegacyTranslations(indexes.Select(index => groups[index]).ToList(), translated, indexes);
                 int done = Interlocked.Increment(ref completed);
                 progress?.Report(new(AuditStage.Translate, AuditStepState.Active, "Translating history ({0}/{1}) complete", done, batches.Count)

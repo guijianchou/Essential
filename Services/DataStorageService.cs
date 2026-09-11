@@ -17,18 +17,18 @@ public partial class DataStorageService
     private readonly string _dbPath;
     private readonly string[] _historyPaths;
     public string DatabasePath => _dbPath;
-    public bool IsReadOnly { get; }
+    public event EventHandler? TokenUsageChanged;
 
     private DataStorageService(string mode, string? dataDirectory)
     {
-        IsReadOnly = AppMode.Normalize(mode) == AppMode.Assistant;
         _dbPath = GetDatabasePath(mode, dataDirectory);
-        _historyPaths = new[] { GetDatabasePath(AppMode.Extended, dataDirectory), GetDatabasePath(AppMode.Assistant, dataDirectory) };
+        // Retired mode: retain its existing records as read-only history.
+        _historyPaths = new[] { _dbPath, Path.Combine(Path.GetDirectoryName(_dbPath)!, "assistant", "audit_data.db") };
         Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = _dbPath,
-            Mode = IsReadOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Mode = SqliteOpenMode.ReadWriteCreate,
             DefaultTimeout = 5
         }.ToString();
 
@@ -39,24 +39,19 @@ public partial class DataStorageService
     {
         string root = dataDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LocalSecurityAudit");
-        return Path.GetFullPath(AppMode.Normalize(mode) == AppMode.Assistant
-            ? Path.Combine(root, "assistant", "audit_data.db") : Path.Combine(root, "audit_data.db"));
+        return Path.GetFullPath(Path.Combine(root, "audit_data.db"));
     }
 
-    public static async Task<DataStorageService> CreateAsync(string mode = AppMode.Assistant, string? dataDirectory = null)
+    public static async Task<DataStorageService> CreateAsync(string mode = AppMode.Extended, string? dataDirectory = null)
     {
         var service = new DataStorageService(mode, dataDirectory);
-        // The viewer can create an empty schema, but opens existing assistant results read-only.
-        if (!service.IsReadOnly || !File.Exists(service._dbPath)) await service.InitializeDatabaseAsync();
+        await service.InitializeDatabaseAsync();
         return service;
     }
 
     private async Task InitializeDatabaseAsync()
     {
-        string connectionString = IsReadOnly
-            ? new SqliteConnectionStringBuilder(_connectionString) { Mode = SqliteOpenMode.ReadWriteCreate }.ToString()
-            : _connectionString;
-        using var connection = new SqliteConnection(connectionString);
+        using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
         var createTableCmd = connection.CreateCommand();
@@ -74,14 +69,70 @@ public partial class DataStorageService
                 Scope TEXT NOT NULL, ModelRank INTEGER NOT NULL, ScanEnd DATETIME NOT NULL,
                 PRIMARY KEY (Scope, ModelRank)
             );
+            CREATE TABLE IF NOT EXISTS TokenUsage (
+                RequestId TEXT PRIMARY KEY NOT NULL,
+                Timestamp DATETIME NOT NULL,
+                InputTokens INTEGER NOT NULL,
+                OutputTokens INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON TokenUsage(Timestamp);
         ";
 
         await createTableCmd.ExecuteNonQueryAsync();
     }
 
+    public void RecordTokenUsage(string requestId, long inputTokens, long outputTokens, DateTime timestampUtc)
+    {
+        if (string.IsNullOrWhiteSpace(requestId) || inputTokens < 0 || outputTokens < 0) return;
+        int changed;
+        using (var connection = new SqliteConnection(_connectionString))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            // Progress can repeat a cumulative snapshot; preserve the first timestamp
+            // and never add the same request twice or regress on an older snapshot.
+            command.CommandText = @"
+                INSERT INTO TokenUsage (RequestId, Timestamp, InputTokens, OutputTokens)
+                VALUES (@id, @timestamp, @input, @output)
+                ON CONFLICT(RequestId) DO UPDATE SET
+                    InputTokens = MAX(TokenUsage.InputTokens, excluded.InputTokens),
+                    OutputTokens = MAX(TokenUsage.OutputTokens, excluded.OutputTokens)
+                WHERE excluded.InputTokens > TokenUsage.InputTokens
+                    OR excluded.OutputTokens > TokenUsage.OutputTokens;
+            ";
+            command.Parameters.AddWithValue("@id", requestId);
+            command.Parameters.AddWithValue("@timestamp", timestampUtc.ToUniversalTime());
+            command.Parameters.AddWithValue("@input", inputTokens);
+            command.Parameters.AddWithValue("@output", outputTokens);
+            changed = command.ExecuteNonQuery();
+        }
+        if (changed > 0) TokenUsageChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public (long Input, long Output, long PeriodInput, long PeriodOutput) GetTokenUsageTotals(string period, DateTime localNow)
+    {
+        DateTime start = localNow.Date;
+        if (period == "week") start = start.AddDays(-(((int)start.DayOfWeek + 6) % 7));
+        else if (period == "month") start = start.AddDays(1 - start.Day);
+        DateTime end = period == "month" ? start.AddMonths(1) : start.AddDays(period == "week" ? 7 : 1);
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT COALESCE(SUM(InputTokens), 0), COALESCE(SUM(OutputTokens), 0),
+                COALESCE(SUM(CASE WHEN Timestamp >= @start AND Timestamp < @end THEN InputTokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN Timestamp >= @start AND Timestamp < @end THEN OutputTokens ELSE 0 END), 0)
+            FROM TokenUsage;
+        ";
+        command.Parameters.AddWithValue("@start", start.ToUniversalTime());
+        command.Parameters.AddWithValue("@end", end.ToUniversalTime());
+        using var reader = command.ExecuteReader();
+        reader.Read();
+        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
+    }
+
     public async Task SaveAuditResultAsync(AuditResult result)
     {
-        EnsureWritable();
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
@@ -147,6 +198,11 @@ public partial class DataStorageService
                 day.AssessedScans++;
                 day.ScoreSum += HealthScoreCalculator.Calculate(result.Findings).Score;
             }
+            else if (result.HasScopedAssessment)
+            {
+                day.ScopedAssessedScans++;
+                day.ScopedScoreSum += HealthScoreCalculator.Calculate(result.Findings).Score;
+            }
         }
         return days.Values.OrderBy(day => day.Date).ToList();
     }
@@ -198,14 +254,13 @@ public partial class DataStorageService
 
     public async Task CleanupOldDataAsync(int retentionDays = 30)
     {
-        EnsureWritable();
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
         // Preserve progress independently of the configurable history retention period.
         using var transaction = connection.BeginTransaction();
         var records = await GetResultsAsync(DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc), DateTime.UtcNow.AddMinutes(1));
-        foreach (var result in records.Where(result => AuditHistory.Text(result, "Mode") != AppMode.Assistant))
+        foreach (var result in records.Where(result => AuditHistory.Text(result, "Mode") != "assistant"))
             await SaveCheckpointAsync(connection, transaction, result);
         var cleanupCmd = connection.CreateCommand();
         cleanupCmd.Transaction = transaction;
@@ -218,7 +273,6 @@ public partial class DataStorageService
 
     public async Task VacuumDatabaseAsync()
     {
-        EnsureWritable();
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 
@@ -237,9 +291,6 @@ public partial class DataStorageService
 
     public Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> GetLegacyFindingsAsync()
         => ReadStoredFindingsAsync(true, CancellationToken.None);
-
-    public Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> GetOptimizationRecordsAsync(CancellationToken cancellationToken = default)
-        => ReadStoredFindingsAsync(false, cancellationToken);
 
     private async Task<List<(long Id, string OriginalJson, List<AuditIssue> Findings)>> ReadStoredFindingsAsync(bool legacyOnly, CancellationToken cancellationToken)
     {
@@ -262,41 +313,8 @@ public partial class DataStorageService
         return results;
     }
 
-    public async Task<string?> UpdateOptimizedFindingsAsync(long id, string originalJson,
-        IReadOnlyDictionary<int, AuditIssue> updates, string model, CancellationToken cancellationToken = default)
-    {
-        EnsureWritable();
-        if (updates.Count == 0 || JsonNode.Parse(originalJson) is not JsonArray stored) return null;
-        foreach (var (index, finding) in updates)
-        {
-            if (index < 0 || index >= stored.Count || stored[index] is not JsonObject original
-                || original.Deserialize<AuditIssue>() is not { } previous || !finding.HasBilingualText
-                || finding.AnalysisModel != model || !AiModelCatalog.CanOptimize(previous.AnalysisModel, model)) return null;
-            var reviewed = JsonSerializer.SerializeToNode(finding)!;
-            foreach (string property in new[] { nameof(AuditIssue.Title), nameof(AuditIssue.Description), nameof(AuditIssue.RootCause),
-                nameof(AuditIssue.Recommendation), nameof(AuditIssue.TitleZh), nameof(AuditIssue.DescriptionZh), nameof(AuditIssue.RootCauseZh),
-                nameof(AuditIssue.RecommendationZh), nameof(AuditIssue.Severity), nameof(AuditIssue.Confidence) })
-                original[property] = reviewed[property]?.DeepClone();
-            original[nameof(AuditIssue.AnalysisModel)] = model;
-            original[nameof(AuditIssue.OriginalAnalysisModel)] = previous.OptimizedAtUtc == null ? previous.AnalysisModel : previous.OriginalAnalysisModel;
-            original[nameof(AuditIssue.OptimizedAtUtc)] = JsonSerializer.SerializeToNode(DateTime.UtcNow);
-        }
-        string updatedJson = stored.ToJsonString();
-        int score = HealthScoreCalculator.Calculate(stored.Deserialize<List<AuditIssue>>()!).Score;
-        using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE AuditResults SET FindingsJson=@updated, HealthScore=@score WHERE Id=@id AND FindingsJson=@original";
-        command.Parameters.AddWithValue("@updated", updatedJson);
-        command.Parameters.AddWithValue("@score", score);
-        command.Parameters.AddWithValue("@id", id);
-        command.Parameters.AddWithValue("@original", originalJson);
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1 ? updatedJson : null;
-    }
-
     public async Task<bool> UpdateTranslatedFindingsAsync(long id, string originalJson, IReadOnlyList<AuditIssue> findings)
     {
-        EnsureWritable();
         if (!findings.Any(issue => issue.HasBilingualText)) return false;
         if (JsonNode.Parse(originalJson) is not JsonArray storedFindings
             || storedFindings.Count != findings.Count
@@ -327,12 +345,6 @@ public partial class DataStorageService
         command.Parameters.AddWithValue("@id", id);
         command.Parameters.AddWithValue("@original", originalJson);
         return await command.ExecuteNonQueryAsync() == 1;
-    }
-
-    private void EnsureWritable()
-    {
-        if (IsReadOnly)
-            throw new InvalidOperationException(AppText.Get("The assistant database is read-only in this app. Publish results using the AGENTS.md workflow."));
     }
 
     public async Task WatchForChangesAsync(Action changed, CancellationToken cancellationToken)

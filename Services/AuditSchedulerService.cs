@@ -20,8 +20,9 @@ public class AuditSchedulerService : IHostedService, IDisposable
     private Task? _runningTask;
     private Task? _initialTask;
     private Task? _historyTask;
-    private Task? _watchTask;
+    private Task? _connectionTestTask;
     private CancellationTokenSource? _historyCts;
+    private CancellationTokenSource? _connectionTestCts;
     private CancellationTokenSource? _cts;
     private CancellationTokenSource? _loopCts;
     private readonly object _lifecycleLock = new();
@@ -32,7 +33,6 @@ public class AuditSchedulerService : IHostedService, IDisposable
     private int _scheduledIntervalHours;
     private AuditStage _currentStage;
     public bool IsScanning { get; private set; }
-    public bool IsAssistantMode => _settingsService.IsAssistantMode;
     public string ActiveMode => _settingsService.ActiveMode;
 
     public event EventHandler<AuditCompletedEventArgs>? AuditCompleted;
@@ -70,13 +70,6 @@ public class AuditSchedulerService : IHostedService, IDisposable
             _isStopping = false;
             startCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _cts = startCts;
-            _watchTask = Task.Run(() => WatchAssistantResultsAsync(startCts.Token), startCts.Token);
-
-            if (IsAssistantMode)
-            {
-                return Task.CompletedTask;
-            }
-
             StartScheduleLoopCore();
 
             _initialTask = Task.Run(async () =>
@@ -189,6 +182,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
         Task? initialTask;
         Task? runningTask;
         Task? historyTask;
+        Task? connectionTestTask;
         CancellationTokenSource? loopCts;
         CancellationTokenSource? cts;
         List<RetiredLoop> retiredLoops;
@@ -199,12 +193,14 @@ public class AuditSchedulerService : IHostedService, IDisposable
             initialTask = _initialTask;
             runningTask = _runningTask;
             historyTask = _historyTask;
+            connectionTestTask = _connectionTestTask;
             loopCts = _loopCts;
             cts = _cts;
 
             loopCts?.Cancel();
             cts?.Cancel();
             _historyCts?.Cancel();
+            _connectionTestCts?.Cancel();
             retiredLoops = _retiredLoops.ToList();
             foreach (var retiredLoop in retiredLoops)
             {
@@ -222,7 +218,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
         if (initialTask != null) tasks.Add(ObserveTaskAsync(initialTask));
         if (runningTask != null) tasks.Add(ObserveTaskAsync(runningTask));
         if (historyTask != null) tasks.Add(ObserveTaskAsync(historyTask));
-        if (_watchTask != null) tasks.Add(ObserveTaskAsync(_watchTask));
+        if (connectionTestTask != null) tasks.Add(ObserveTaskAsync(connectionTestTask));
         tasks.AddRange(retiredLoops.Select(loop => ObserveTaskAsync(loop.Task)));
 
         var completion = Task.WhenAll(tasks);
@@ -290,18 +286,79 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
-        if (IsAssistantMode) return;
         if (_scheduledIntervalHours == _settingsService.Current.ScanIntervalHours) return;
         _scheduledIntervalHours = _settingsService.Current.ScanIntervalHours;
         RestartScheduleLoop();
     }
 
+    public async Task<(bool Success, string Message)> TestConnectionAsync(AiTarget target, string kernel)
+    {
+        CancellationTokenSource source;
+        TaskCompletionSource completion;
+        lock (_lifecycleLock)
+        {
+            if (_isStopping) return (false, AppText.Get("Connection test canceled."));
+            if (!_auditGate.Wait(0))
+                return (false, AppText.Get("Wait for the current operation to finish before testing a connection."));
+            source = CancellationTokenSource.CreateLinkedTokenSource(_cts?.Token ?? CancellationToken.None);
+            _connectionTestCts = source;
+            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _connectionTestTask = completion.Task;
+        }
+
+        void ReportTest(AuditProgressEventArgs progress) => ReportProgress(
+            new(progress.Stage, progress.State, progress.MessageKey, progress.Arguments)
+            {
+                StartsScan = progress.StartsScan, IsConnectionTest = true, BatchNumber = 1,
+                EstimatedInputTokens = progress.EstimatedInputTokens,
+                RequestId = progress.RequestId, HasTokenUsage = progress.HasTokenUsage,
+                InputTokens = progress.InputTokens, OutputTokens = progress.OutputTokens
+            });
+        try
+        {
+            await PauseHistoryTranslationAsync();
+            source.Token.ThrowIfCancellationRequested();
+            IsScanning = true;
+            ReportTest(new(AuditStage.Route, AuditStepState.Active, "Testing {0} connection...", kernel) { StartsScan = true });
+            ReportTest(new(AuditStage.Route, AuditStepState.Done, "{0} / {1}", kernel, target.Model));
+            var result = await _aiAnalysisService.TestConnectionAsync(target, kernel,
+                new AuditProgressReporter(ReportTest), source.Token);
+            IsScanning = false;
+            ReportTest(new(AuditStage.Analyze, result.Success ? AuditStepState.Done : AuditStepState.Failed, result.Message));
+            if (result.Success) ReportTest(new(AuditStage.Complete, AuditStepState.Done, "Connection test passed."));
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            IsScanning = false;
+            ReportTest(new(AuditStage.Analyze, AuditStepState.Failed, "Connection test canceled."));
+            return (false, AppText.Get("Connection test canceled."));
+        }
+        catch (Exception ex)
+        {
+            IsScanning = false;
+            ReportTest(new(AuditStage.Analyze, AuditStepState.Failed, "Connection test failed: {0}", ex.Message));
+            return (false, AppText.Format("Connection test failed: {0}", ex.Message));
+        }
+        finally
+        {
+            IsScanning = false;
+            _auditGate.Release();
+            lock (_lifecycleLock)
+            {
+                if (ReferenceEquals(_connectionTestCts, source)) _connectionTestCts = null;
+                source.Dispose();
+                completion.SetResult();
+            }
+        }
+    }
+
     public async Task<bool> ExecuteAuditAsync(
         bool fastScan = true,
         CancellationToken cancellationToken = default,
-        int fullScanDays = 1)
+        int fullScanDays = 1,
+        bool reanalyzeRange = false)
     {
-        _settingsService.EnsureExtendedMode();
         if (!fastScan && fullScanDays is not (1 or 2 or 7)) throw new ArgumentOutOfRangeException(nameof(fullScanDays));
         await _auditGate.WaitAsync(cancellationToken);
         var stopwatch = Stopwatch.StartNew();
@@ -310,20 +367,22 @@ public class AuditSchedulerService : IHostedService, IDisposable
             await PauseHistoryTranslationAsync();
             cancellationToken.ThrowIfCancellationRequested();
             IsScanning = true;
+            ReportProgress(new(AuditStage.Collect, AuditStepState.Active, "Preparing scan...") { StartsScan = true });
             DateTime endTime = DateTime.UtcNow;
             var checkpoint = await _storageService.GetScanCheckpointAsync(ActiveMode);
             string requestedModel = _settingsService.Current.AiTargets.FirstOrDefault(target => target.Name == AiTargetSettings.MainName)?.Model
                 ?? _settingsService.Current.AiTargets.FirstOrDefault()?.Model ?? string.Empty;
             bool modelUpgrade = checkpoint.BestModelRank >= 0 && AiModelCatalog.Rank(requestedModel) > checkpoint.BestModelRank;
             _lastScanTime = checkpoint.Cursor;
-            DateTime startTime = GetScanStart(fastScan, endTime, _lastScanTime, _settingsService.Current, fullScanDays, modelUpgrade);
-            string scanReason = modelUpgrade ? "model_upgrade" : _lastScanTime == default ? "initial" : "incremental";
+            DateTime startTime = GetScanStart(fastScan, endTime, _lastScanTime, _settingsService.Current, fullScanDays, modelUpgrade, reanalyzeRange);
+            string scanReason = reanalyzeRange ? "manual_reanalysis" : modelUpgrade ? "model_upgrade" : _lastScanTime == default ? "initial" : "incremental";
+            string kernel = AiKernelCatalog.Normalize(_settingsService.Current.AiKernel);
 
             _diagnosticLogService.Write(
-                $"Audit started: type={(fastScan ? "fast" : "full")}, reason={scanReason}, model={requestedModel}, from={startTime:O}, to={endTime:O}");
+                $"Audit started: type={(fastScan ? "fast" : "full")}, reason={scanReason}, kernel={kernel}, model={requestedModel}, from={startTime:O}, to={endTime:O}");
             ReportProgress(new(AuditStage.Collect, AuditStepState.Active, fastScan
                 ? "Fast scan: reading Windows event logs..."
-                : "Full scan: reading Windows event logs...") { StartsScan = true });
+                : "Full scan: reading Windows event logs..."));
             var collection = await _eventLogService.ReadAllEventsAsync(startTime, endTime, cancellationToken, new AuditProgressReporter(ReportProgress));
             var events = collection.Events;
             _diagnosticLogService.Write(
@@ -340,14 +399,16 @@ public class AuditSchedulerService : IHostedService, IDisposable
             IReadOnlyList<string> analysisModels = Array.Empty<string>();
             if (events.Count == 0)
             {
-                ReportProgress(new(AuditStage.Route, AuditStepState.Skipped, "No events to analyze."));
-                ReportProgress(new(AuditStage.Analyze, AuditStepState.Skipped, "No events to analyze."));
+                _diagnosticLogService.Write($"AI skipped: kernel={kernel}, reason=no_events, scanReason={scanReason}");
+                ReportProgress(new(AuditStage.Route, AuditStepState.Skipped, "No events in this scan window; {0} was not called.", kernel));
+                ReportProgress(new(AuditStage.Analyze, AuditStepState.Skipped, "No events in this scan window; {0} was not called.", kernel));
                 issues = new List<AuditIssue>();
             }
             else
             {
+                if (reanalyzeRange) _aiAnalysisService.ClearCache();
                 _diagnosticLogService.Write(
-                    $"Audit sending events to AI: type={(fastScan ? "fast" : "full")}, events={events.Count}");
+                    $"Audit sending events to AI: type={(fastScan ? "fast" : "full")}, kernel={kernel}, events={events.Count}");
                 (issues, analyzedEventCount) = await _aiAnalysisService.AnalyzeEventsAsync(
                     events,
                     new AuditProgressReporter(ReportProgress),
@@ -371,6 +432,7 @@ public class AuditSchedulerService : IHostedService, IDisposable
                     { "Mode", JsonSerializer.SerializeToElement(ActiveMode) },
                     { "AnalysisModels", JsonSerializer.SerializeToElement(analysisModels) },
                     { "RequestedModel", JsonSerializer.SerializeToElement(requestedModel) },
+                    { "RequestedKernel", JsonSerializer.SerializeToElement(kernel) },
                     { "AnalysisCompleted", JsonSerializer.SerializeToElement(true) },
                     { "ScanReason", JsonSerializer.SerializeToElement(scanReason) },
                     { "CoverageStatus", JsonSerializer.SerializeToElement(collection.CoverageStatus) },
@@ -405,7 +467,9 @@ public class AuditSchedulerService : IHostedService, IDisposable
             else
             {
                 ReportProgress(new(AuditStage.Translate, AuditStepState.Skipped, "No new analysis to translate."));
-                ReportProgress(new(AuditStage.Complete, AuditStepState.Done, "Scan saved / not assessed"));
+                ReportProgress(new(AuditStage.Complete, AuditStepState.Done, events.Count == 0
+                    ? "No events in this scan window. Use Reanalyze selected range to analyze earlier events."
+                    : "All events excluded by filtering. No AI analysis was performed."));
             }
             try { await _storageService.CleanupOldDataAsync(_settingsService.Current.RetentionDays); }
             catch (Exception ex) { _diagnosticLogService.WriteException("Retention cleanup failed; the audit is saved", ex); }
@@ -438,11 +502,11 @@ public class AuditSchedulerService : IHostedService, IDisposable
         }
     }
 
-    internal static DateTime GetScanStart(bool fastScan, DateTime endTime, DateTime lastScanTime, AppSettings settings, int fullScanDays = 1, bool modelUpgrade = false)
+    internal static DateTime GetScanStart(bool fastScan, DateTime endTime, DateTime lastScanTime, AppSettings settings, int fullScanDays = 1, bool modelUpgrade = false, bool reanalyzeRange = false)
     {
         if (fullScanDays is not (1 or 2 or 7)) throw new ArgumentOutOfRangeException(nameof(fullScanDays));
-        if (lastScanTime > DateTime.MinValue && lastScanTime < endTime && !modelUpgrade) return lastScanTime;
-        if (!fastScan || modelUpgrade)
+        if (lastScanTime > DateTime.MinValue && lastScanTime < endTime && !modelUpgrade && !reanalyzeRange) return lastScanTime;
+        if (!fastScan || modelUpgrade || reanalyzeRange)
         {
             var baseline = endTime.AddDays(-fullScanDays);
             return lastScanTime > DateTime.MinValue && lastScanTime < baseline ? lastScanTime : baseline;
@@ -465,75 +529,10 @@ public class AuditSchedulerService : IHostedService, IDisposable
         return DateTime.MinValue;
     }
 
-    public async Task<int> OptimizeHistoryAsync(string model, IProgress<AuditProgressEventArgs>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        _settingsService.EnsureExtendedMode();
-        if (AiModelCatalog.Rank(model) < 0) throw new InvalidOperationException(AppText.Get("Select an explicit optimization model."));
-        await _auditGate.WaitAsync(cancellationToken);
-        Task<int> task;
-        try
-        {
-            await PauseHistoryTranslationAsync();
-            cancellationToken.ThrowIfCancellationRequested();
-            lock (_lifecycleLock)
-            {
-                if (_isStopping) throw new OperationCanceledException();
-                var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _cts?.Token ?? CancellationToken.None);
-                _historyCts = source;
-                // Share the historical-work lifetime: a new scan or app shutdown
-                // cancels optimization and waits for its current save to finish.
-                task = Task.Run(async () =>
-                {
-                    try { return await RunOptimizationAsync(model, progress, source.Token).ConfigureAwait(false); }
-                    finally
-                    {
-                        lock (_lifecycleLock)
-                        {
-                            if (ReferenceEquals(_historyCts, source)) _historyCts = null;
-                            source.Dispose();
-                        }
-                    }
-                });
-                _historyTask = task;
-            }
-        }
-        finally { _auditGate.Release(); }
-        return await task;
-    }
-
-    private async Task<int> RunOptimizationAsync(string model, IProgress<AuditProgressEventArgs>? progress, CancellationToken cancellationToken)
-    {
-        var records = await _storageService.GetOptimizationRecordsAsync(cancellationToken);
-        int total = records.Sum(record => record.Findings.Count(issue => AiModelCatalog.CanOptimize(issue.AnalysisModel, model)));
-        int completed = 0;
-        progress?.Report(new(AuditStage.Analyze, AuditStepState.Active, "Optimizing {0} findings with {1}", total, model) { TotalUnits = total });
-        foreach (var record in records)
-        {
-            string json = record.OriginalJson;
-            var indexes = Enumerable.Range(0, record.Findings.Count)
-                .Where(index => AiModelCatalog.CanOptimize(record.Findings[index].AnalysisModel, model)).Chunk(8);
-            foreach (var batch in indexes)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var reviewed = await _aiAnalysisService.OptimizeFindingsAsync(batch.Select(index => record.Findings[index]).ToList(), model,
-                    new AuditProgressReporter(value => progress?.Report(new(value.Stage, value.State, value.MessageKey, value.Arguments)
-                    { CompletedUnits = completed, TotalUnits = total })), cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                var updates = batch.Select((index, offset) => (index, finding: reviewed[offset])).ToDictionary(pair => pair.index, pair => pair.finding);
-                json = await _storageService.UpdateOptimizedFindingsAsync(record.Id, json, updates, model, cancellationToken)
-                    ?? throw new InvalidOperationException(AppText.Get("History changed during optimization. Reload before continuing."));
-                completed += batch.Length;
-                HistoryUpdated?.Invoke(this, EventArgs.Empty);
-                progress?.Report(new(AuditStage.Save, AuditStepState.Active, "Saved {0}/{1} optimized findings", completed, total)
-                { CompletedUnits = completed, TotalUnits = total });
-            }
-        }
-        return completed;
-    }
-
     private void ReportProgress(AuditProgressEventArgs progress)
     {
+        if (progress.HasTokenUsage)
+            _storageService.RecordTokenUsage(progress.RequestId, progress.InputTokens, progress.OutputTokens, DateTime.UtcNow);
         if (progress.State == AuditStepState.Active && progress.Stage != AuditStage.Translate)
             _currentStage = progress.Stage;
         AuditProgress?.Invoke(this, progress);
@@ -552,7 +551,6 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
     private void StartHistoryTranslation()
     {
-        if (IsAssistantMode) return;
         lock (_lifecycleLock)
         {
             if (_isStopping || _historyTask is { IsCompleted: false }) return;
@@ -575,7 +573,6 @@ public class AuditSchedulerService : IHostedService, IDisposable
 
     private async Task UpgradeLegacyFindingsAsync(CancellationToken cancellationToken)
     {
-        _settingsService.EnsureExtendedMode();
         string status = "English + Simplified Chinese saved";
         var state = AuditStepState.Done;
         try
@@ -634,23 +631,15 @@ public class AuditSchedulerService : IHostedService, IDisposable
     public void Dispose()
     {
         _settingsService.SettingsChanged -= OnSettingsChanged;
-        _auditGate.Dispose();
-    }
-
-    private async Task WatchAssistantResultsAsync(CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
+        lock (_lifecycleLock)
         {
-            try
-            {
-                await _storageService.WatchForChangesAsync(() => HistoryUpdated?.Invoke(this, EventArgs.Empty), cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
-            catch (Exception ex)
-            {
-                _diagnosticLogService.WriteException("Assistant result refresh deferred", ex);
-                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
-            }
+            _isStopping = true;
+            _connectionTestCts?.Cancel();
+            if (_connectionTestTask is { IsCompleted: false })
+                _ = _connectionTestTask.ContinueWith(_ => _auditGate.Dispose(),
+                    CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            else
+                _auditGate.Dispose();
         }
     }
 

@@ -4,10 +4,13 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>LocalSecurityAudit</RootNamespace>
-    <Version>0.3.8</Version>
-    <AssemblyVersion>0.3.8.0</AssemblyVersion>
-    <FileVersion>0.3.8.0</FileVersion>
-    <InformationalVersion>0.3.8</InformationalVersion>
+    <AssemblyName>Essential</AssemblyName>
+    <Title>Essential</Title>
+    <Product>Essential</Product>
+    <Version>0.4.3</Version>
+    <AssemblyVersion>0.4.3.0</AssemblyVersion>
+    <FileVersion>0.4.3.0</FileVersion>
+    <InformationalVersion>0.4.3</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x86;x64;ARM64</Platforms>
@@ -21,20 +24,19 @@
     <UseRidGraph>true</UseRidGraph>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-    <!-- Keep each configuration's artifacts isolated by the product version. -->
-    <OutputPath>bin\$(Platform)\$(Configuration)\LocalSecurityAudit-$(Version)\</OutputPath>
-    <IntermediateOutputPath>obj\$(Platform)\$(Configuration)\LocalSecurityAudit-$(Version)\</IntermediateOutputPath>
+    <!-- Reuse build caches; only distributable packages are versioned. -->
+    <OutputPath>$(BaseOutputPath)$(Platform)\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>$(BaseIntermediateOutputPath)$(Platform)\$(Configuration)\</IntermediateOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
     <Content Include="Assets\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="AGENTS.md;tools\collect-assistant-events.ps1;tools\publish-assistant-audit.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Resources\Strings.zh-CN.json" WithCulture="false" LogicalName="LocalSecurityAudit.Resources.Strings.zh-CN.json" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(Configuration)' == 'Debug'">
-    <Content Include="codex-x86_64-pc-windows-msvc.exe.zip" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
-    <Content Include="pi-windows-x64.zip" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+    <Content Include="codex-x86_64-pc-windows-msvc.exe.zip" Condition="Exists('codex-x86_64-pc-windows-msvc.exe.zip')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+    <Content Include="pi-windows-x64.zip" Condition="Exists('pi-windows-x64.zip')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
   <ItemGroup>

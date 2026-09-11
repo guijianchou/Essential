@@ -1,12 +1,14 @@
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace LocalSecurityAudit.Models;
 
 public sealed class AppSettings
 {
-    public string Mode { get; set; } = AppMode.Assistant;
+    public string Mode { get; set; } = AppMode.Extended;
     public string Theme { get; set; } = "system";
     public string Language { get; set; } = "en";
+    public string TokenUsagePeriod { get; set; } = "day";
     public bool MinimizeToTray { get; set; }
     public bool AutoScanEnabled { get; set; } = true;
     public int ScanIntervalHours { get; set; } = 4;
@@ -16,10 +18,13 @@ public sealed class AppSettings
     public bool HighSeverityNotification { get; set; } = true;
     public bool ScanCompleteNotification { get; set; }
     public bool DiagnosticLoggingEnabled { get; set; }
-    public string AgentInstructions { get; set; } = "";
-    public string AiKernel { get; set; } = AiKernelCatalog.Http;
+    public string SecurityAuditInstructions { get; set; } = "";
+    // Read the old shared setting once; new saves contain only the audit-specific field.
+    [JsonPropertyName("AgentInstructions")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyAgentInstructions { get; set; }
+    public string AiKernel { get; set; } = AiKernelCatalog.Codex;
     public List<AiTargetSettings> AiTargets { get; set; } = new();
-    public string OptimizationModel { get; set; } = AiModelCatalog.Astra;
     public int MaxConcurrentAnalysis { get; set; } = 3;
     public bool EnableSmartFiltering { get; set; } = true;
     public bool EnableCaching { get; set; } = true;

@@ -47,14 +47,10 @@
         <!-- Page header -->
         <Grid Grid.Row="0" Padding="32,18,32,8" ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="2" VerticalAlignment="Center">
-                <TextBlock Text="{Binding [Dashboard], Source={StaticResource AppText}}" Style="{StaticResource SubtitleTextStyle}" />
+                <TextBlock Text="{Binding [Securityaudit], Source={StaticResource AppText}}" Style="{StaticResource SubtitleTextStyle}" />
                 <TextBlock Text="{x:Bind ViewModel.LastAuditHeadline, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
             </StackPanel>
-            <Button Grid.Column="1" Content="{Binding [Refreshresults], Source={StaticResource AppText}}" VerticalAlignment="Center"
-                    Command="{x:Bind ViewModel.LoadDataCommand}" IsEnabled="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"
-                    Visibility="{x:Bind ViewModel.IsAssistantMode, Converter={StaticResource BoolToVisibilityConverter}}" />
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"
-                        Visibility="{x:Bind ViewModel.IsExtendedMode, Converter={StaticResource BoolToVisibilityConverter}}">
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <Button Height="32" Padding="12,0" Command="{x:Bind ViewModel.RunFastScanCommand}" IsEnabled="{x:Bind ViewModel.IsLoading, Converter={StaticResource InverseBoolConverter}, Mode=OneWay}" AutomationProperties.Name="{Binding [Runfastscan], Source={StaticResource AppText}}" ToolTipService.ToolTip="{Binding [Scanrecenteventsusingtheconfiguredtimerange], Source={StaticResource AppText}}">
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <FontIcon Glyph="&#xE8FE;" FontSize="12" />
@@ -75,10 +71,25 @@
                     <ComboBoxItem Content="2d" />
                     <ComboBoxItem Content="1w" />
                 </ComboBox>
+                <Button Height="32" Padding="8,0"
+                                IsEnabled="{x:Bind ViewModel.IsLoading, Converter={StaticResource InverseBoolConverter}, Mode=OneWay}"
+                                AutomationProperties.Name="{Binding [Scanoptions], Source={StaticResource AppText}}"
+                                ToolTipService.ToolTip="{Binding [Scanoptions], Source={StaticResource AppText}}">
+                    <FontIcon Glyph="&#xE712;" FontSize="14" />
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem Text="{Binding [Reanalyzeselectedrange], Source={StaticResource AppText}}"
+                                            Command="{x:Bind ViewModel.ReanalyzeRangeCommand}"
+                                            ToolTipService.ToolTip="{x:Bind ViewModel.ReanalyzeRangeHint, Mode=OneWay}">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE72C;" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
             </StackPanel>
         </Grid>
 
-        <ScrollViewer Grid.Row="1"
+        <ScrollViewer x:Name="AuditScroll" Grid.Row="1"
                       Padding="32,8,32,32"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
@@ -93,8 +104,78 @@
                 <!-- One overview surface; period totals and the selected audit remain explicitly labelled. -->
                 <Border Style="{StaticResource CardStyle}" AutomationProperties.Name="{Binding [Healthoverview], Source={StaticResource AppText}}">
                     <StackPanel Spacing="16">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                            <TextBlock Text="{Binding [Healthoverview], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" VerticalAlignment="Center" />
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                            <StackPanel Spacing="3" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding [Healthoverview], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedAuditLabel, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" />
+                            </StackPanel>
+                            <CalendarDatePicker x:Name="AuditDatePicker" Grid.Column="1" Width="150" Height="32"
+                                                Date="{x:Bind ViewModel.SelectedAuditDate, Mode=OneWay}" MaxDate="{x:Bind ViewModel.LatestSelectableAuditDate}"
+                                                DateChanged="OnAuditDateChanged" PlaceholderText="{Binding [Chooseadate], Source={StaticResource AppText}}"
+                                                AutomationProperties.Name="{Binding [Auditdate], Source={StaticResource AppText}}" />
+                            <Button Grid.Column="2" Content="{Binding [Latestaudit], Source={StaticResource AppText}}"
+                                    Command="{x:Bind ViewModel.SelectLatestCommand}" Padding="10,0" Height="32" />
+                        </Grid>
+                        <Grid ColumnDefinitions="2*,3*" ColumnSpacing="24">
+                            <Grid x:Name="HealthScoreContent" RowDefinitions="Auto,Auto,Auto" RowSpacing="8" VerticalAlignment="Center">
+                                <TextBlock Text="{x:Bind ViewModel.HealthScoreLabel, Mode=OneWay}" Style="{StaticResource CaptionStrongTextStyle}"
+                                           ToolTipService.ToolTip="{x:Bind ViewModel.HealthDeductionText, Mode=OneWay}" />
+                                <Grid Grid.Row="1" ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                                    <TextBlock x:Name="HealthScoreText" Text="{x:Bind ViewModel.HealthScoreText, Mode=OneWay}" FontSize="48" LineHeight="54"
+                                               Style="{StaticResource HeroNumberStyle}" AutomationProperties.Name="{x:Bind ViewModel.HealthScoreLabel, Mode=OneWay}" />
+                                    <Grid Grid.Column="1" ColumnDefinitions="Auto,*" ColumnSpacing="7" VerticalAlignment="Center">
+                                        <Ellipse x:Name="HealthDot" Width="7" Height="7" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.HealthVerdict, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}"
+                                                   TextWrapping="Wrap" MaxLines="2" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Grid>
+                                <TextBlock Grid.Row="2" Text="{x:Bind ViewModel.HealthSummaryText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}"
+                                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ViewModel.HealthSummaryText, Mode=OneWay}" />
+                            </Grid>
+                            <Grid x:Name="AuditSummaryContent" Grid.Column="1" RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
+                                <TextBlock Text="{Binding [Findingsinthisaudit], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" />
+                                <Grid Grid.Row="1" ColumnDefinitions="*,*,*" ColumnSpacing="12"
+                                      AutomationProperties.Name="{Binding [Findingsinthisaudit], Source={StaticResource AppText}}">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind ViewModel.AuditHighCountText, Mode=OneWay}" FontSize="24" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding [High], Source={StaticResource AppText}}" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource SeverityHighTextBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind ViewModel.AuditMediumCountText, Mode=OneWay}" FontSize="24" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding [Medium], Source={StaticResource AppText}}" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource SeverityMediumTextBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind ViewModel.AuditLowCountText, Mode=OneWay}" FontSize="24" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding [Low], Source={StaticResource AppText}}" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource SeverityLowTextBrush}" />
+                                    </StackPanel>
+                                </Grid>
+                                <Button x:Name="AuditPriorityButton" Grid.Row="2" Tag="{x:Bind ViewModel.AuditPriorityFinding, Mode=OneWay}" Click="OnFindingClick"
+                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="12,10" CornerRadius="6"
+                                        Background="{ThemeResource FindingCardBackgroundBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        Visibility="{x:Bind ViewModel.HasAuditPriority, Converter={StaticResource BoolToVisibilityConverter}, Mode=OneWay}"
+                                        AutomationProperties.Name="{x:Bind ViewModel.AuditPriorityTitle, Mode=OneWay}"
+                                        AutomationProperties.HelpText="{Binding [Openfindingdetails], Source={StaticResource AppText}}"
+                                        ToolTipService.ToolTip="{x:Bind ViewModel.AuditPriorityAction, Mode=OneWay}">
+                                    <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto" RowSpacing="4" ColumnSpacing="8">
+                                        <TextBlock Text="{Binding [Reviewfirst], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                                        <FontIcon Grid.Column="1" Glyph="&#xE76C;" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{x:Bind ViewModel.AuditPriorityTitle, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}"
+                                                   FontSize="13" MaxLines="2" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="{x:Bind ViewModel.AuditPriorityAction, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}"
+                                                   MaxLines="2" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                    </Grid>
+                                </Button>
+                                <StackPanel x:Name="AuditSummaryEmptyState" Grid.Row="2" Padding="12,10" Spacing="4"
+                                            Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="6"
+                                            Visibility="{x:Bind ViewModel.HasAuditPriority, Converter={StaticResource InverseBoolToVisibilityConverter}, Mode=OneWay}">
+                                    <TextBlock Text="{x:Bind ViewModel.AuditSummaryEmptyTitle, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" FontSize="13" TextWrapping="Wrap" />
+                                    <TextBlock Text="{x:Bind ViewModel.AuditSummaryEmptyText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Grid>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Padding="0,12,0,0"
+                              BorderThickness="0,1,0,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+                            <TextBlock Text="{Binding [Auditactivity], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}" VerticalAlignment="Center" />
                             <Border Grid.Column="1" Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="6" Padding="2">
                                 <StackPanel Orientation="Horizontal" Spacing="2">
                                     <ToggleButton Tag="0" Content="{Binding [All], Source={StaticResource AppText}}" IsChecked="{x:Bind ViewModel.IsRangeAll, Mode=OneWay}" Click="OnActivityRangeClick" Padding="10,0" MinHeight="28" Height="28" BorderThickness="0" CornerRadius="4" />
@@ -103,82 +184,27 @@
                                 </StackPanel>
                             </Border>
                         </Grid>
-                        <Grid ColumnDefinitions="2*,3*" ColumnSpacing="24">
-                            <Grid x:Name="HealthScoreContent" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8" VerticalAlignment="Top">
-                                <TextBlock Text="{x:Bind ViewModel.HealthScoreLabel, Mode=OneWay}" Style="{StaticResource CaptionStrongTextStyle}"
-                                           ToolTipService.ToolTip="{x:Bind ViewModel.HealthDeductionText, Mode=OneWay}" />
-                                <Grid Grid.Row="1" ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                                    <TextBlock x:Name="HealthScoreText" Text="{x:Bind ViewModel.HealthScoreText, Mode=OneWay}" FontSize="48" LineHeight="54"
-                                               Style="{StaticResource HeroNumberStyle}" AutomationProperties.Name="{x:Bind ViewModel.HealthScoreLabel, Mode=OneWay}" />
-                                    <Grid Grid.Column="1" ColumnDefinitions="Auto,*" ColumnSpacing="7" VerticalAlignment="Center">
-                                        <Ellipse x:Name="HealthDot" Width="7" Height="7" VerticalAlignment="Center" />
-                                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.HealthVerdict, Mode=OneWay}" Style="{StaticResource BodyStrongTextStyle}" TextWrapping="Wrap" MaxLines="2" VerticalAlignment="Center" />
-                                    </Grid>
-                                </Grid>
-                                <Grid x:Name="HealthMeter" Grid.Row="2" Height="4" AutomationProperties.Name="{Binding [Healthmeter], Source={StaticResource AppText}}"
-                                      AutomationProperties.HelpText="{x:Bind ViewModel.HealthDeductionText, Mode=OneWay}"
-                                      ToolTipService.ToolTip="{x:Bind ViewModel.HealthDeductionText, Mode=OneWay}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition x:Name="HealthMeterFillColumn" Width="0*" />
-                                        <ColumnDefinition x:Name="HealthMeterRestColumn" Width="100*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Border Grid.ColumnSpan="2" Background="{ThemeResource MeterTrackBrush}" CornerRadius="3" />
-                                    <Border x:Name="HealthMeterFill" CornerRadius="3" Visibility="Collapsed" />
-                                </Grid>
-                                <TextBlock Grid.Row="3" Text="{x:Bind ViewModel.HealthSummaryText, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}"
-                                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ViewModel.HealthSummaryText, Mode=OneWay}" />
-                            </Grid>
-                            <Border Grid.Column="1" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="1,0,0,0" Padding="24,0,0,0">
-                                <StackPanel Spacing="12">
-                                    <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="12">
-                                        <StackPanel Spacing="3">
-                                            <TextBlock Text="{Binding [Audits], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
-                                            <TextBlock Text="{x:Bind ViewModel.ActivityScansText, Mode=OneWay}" FontSize="22" FontWeight="SemiBold" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Spacing="3" ToolTipService.ToolTip="{Binding [FindingstotaledacrossauditsRepeatedfindingsmayappearinmultiplescans], Source={StaticResource AppText}}">
-                                            <TextBlock Text="{Binding [Recordedfindings], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
-                                            <TextBlock Text="{x:Bind ViewModel.ActivityFindingsText, Mode=OneWay}" FontSize="22" FontWeight="SemiBold" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2" Spacing="3">
-                                            <TextBlock Text="{Binding [Activedays], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
-                                            <TextBlock Text="{x:Bind ViewModel.ActiveDaysText, Mode=OneWay}" FontSize="22" FontWeight="SemiBold" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="3" Spacing="3" ToolTipService.ToolTip="{Binding [Onlyfullycoveredassessedauditscontributetothisaverage], Source={StaticResource AppText}}">
-                                            <TextBlock Text="{Binding [Averagefullscope], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
-                                            <TextBlock Text="{x:Bind ViewModel.AverageHealthText, Mode=OneWay}" FontSize="22" FontWeight="SemiBold" />
-                                        </StackPanel>
-                                    </Grid>
-                                    <ScrollViewer MaxHeight="108" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                                        <ItemsControl DataContext="{x:Bind ViewModel}" ItemsSource="{x:Bind ViewModel.ActivityDays, Mode=OneWay}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate><WrapGrid Orientation="Horizontal" MaximumRowsOrColumns="{Binding ActivityColumns}" ItemWidth="18" ItemHeight="18" /></ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:DashboardDay">
-                                                    <ToggleButton Tag="{x:Bind}" Width="16" MinWidth="16" Height="16" MinHeight="16" Padding="2" CornerRadius="3" BorderThickness="0"
-                                                                  Background="{ThemeResource ControlFillColorTertiaryBrush}"
-                                                                  IsChecked="{x:Bind IsSelected, Mode=OneWay}" Click="OnDayClick"
-                                                                  AutomationProperties.Name="{x:Bind AccessibleLabel, Mode=OneWay}" ToolTipService.ToolTip="{x:Bind AccessibleLabel, Mode=OneWay}">
-                                                        <Grid Width="10" Height="10">
-                                                            <Border CornerRadius="2" Background="{ThemeResource MeterTrackBrush}" />
-                                                            <Border CornerRadius="2" Background="{ThemeResource AccentFillColorDefaultBrush}" Opacity="{x:Bind ActivityOpacity, Mode=OneWay}" />
-                                                        </Grid>
-                                                    </ToggleButton>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </ScrollViewer>
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                                        <TextBlock Text="{x:Bind ViewModel.SelectedDayText, Mode=OneWay}" Style="{StaticResource CaptionStrongTextStyle}" VerticalAlignment="Center" />
-                                        <Button Grid.Column="1" Content="{Binding [Latestaudit], Source={StaticResource AppText}}" Command="{x:Bind ViewModel.SelectLatestCommand}" Padding="8,0" Height="26" MinHeight="26" />
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
+                        <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="16">
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="{Binding [Audits], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.ActivityScansText, Mode=OneWay}" FontSize="22" FontWeight="SemiBold" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="3" ToolTipService.ToolTip="{Binding [FindingstotaledacrossauditsRepeatedfindingsmayappearinmultiplescans], Source={StaticResource AppText}}">
+                                <TextBlock Text="{Binding [Recordedfindings], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="{x:Bind ViewModel.ActivityFindingsText, Mode=OneWay}" FontSize="22" FontWeight="SemiBold" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="3">
+                                <TextBlock Text="{Binding [Activedays], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.ActiveDaysText, Mode=OneWay}" FontSize="22" FontWeight="SemiBold" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="3" Spacing="3" ToolTipService.ToolTip="{x:Bind ViewModel.HealthAverageHint, Mode=OneWay}">
+                                <TextBlock Text="{x:Bind ViewModel.HealthAverageLabel, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="{x:Bind ViewModel.HealthAverageText, Mode=OneWay}" FontSize="22" FontWeight="SemiBold" />
+                            </StackPanel>
                         </Grid>
                         <TextBlock Text="{x:Bind ViewModel.ActivityHint, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" />
                         <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="0,12,0,0">
                             <StackPanel Spacing="8">
-                                <TextBlock Text="{x:Bind ViewModel.SelectedAuditLabel, Mode=OneWay}" Style="{StaticResource CaptionStrongTextStyle}" />
                                 <Grid x:Name="AuditDetailsContent" ColumnDefinitions="*,*,2*,*" ColumnSpacing="16">
                                     <StackPanel Spacing="3">
                                         <TextBlock Text="{Binding [Scan], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" />
@@ -265,18 +291,31 @@
                                    ToolTipService.ToolTip="{Binding [Occurrencetimeline], Source={StaticResource AppText}}"
                                    AutomationProperties.Name="{Binding [Occurrencetimeline], Source={StaticResource AppText}}"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <StackPanel Spacing="10" Visibility="{x:Bind ViewModel.PriorityFindings.Count, Mode=OneWay, Converter={StaticResource NonZeroCountToVisibilityConverter}}">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12"
+                              Visibility="{x:Bind ViewModel.HasAuditData, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBox x:Name="FindingSearchBox" Text="{x:Bind ViewModel.FindingSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     PlaceholderText="{Binding [SearcheventIDproviderortitle], Source={StaticResource AppText}}"
+                                     AutomationProperties.Name="{Binding [SearcheventIDproviderortitle], Source={StaticResource AppText}}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                                <ToggleButton Tag="Priority" Content="{Binding [Priorityview], Source={StaticResource AppText}}"
+                                              IsChecked="{x:Bind ViewModel.IsPriorityView, Mode=OneWay}" Click="OnFindingsViewClick" />
+                                <ToggleButton x:Name="AllFindingsButton" Tag="All" Content="{x:Bind ViewModel.AllFindingsLabel, Mode=OneWay}"
+                                              IsChecked="{x:Bind ViewModel.ShowAllFindings, Mode=OneWay}" Click="OnFindingsViewClick" />
+                            </StackPanel>
+                        </Grid>
+
+                        <StackPanel x:Name="PriorityFindingsPanel" Spacing="10" Visibility="{x:Bind ViewModel.ShowPriorityFindings, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                 <TextBlock Text="{Binding [Priorityfindings], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}"
                                            ToolTipService.ToolTip="{Binding [Startherehighestseveritymostrepeatedandnewestevidence], Source={StaticResource AppText}}" />
-                                <TextBlock Grid.Column="1" Text="{Binding [Top5], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.PriorityPreviewLabel, Mode=OneWay}" Style="{StaticResource CaptionTextStyle}" VerticalAlignment="Center" />
                             </Grid>
                             <ItemsControl ItemsSource="{x:Bind ViewModel.PriorityFindings, Mode=OneWay}" ItemTemplate="{StaticResource FindingPreviewTemplate}" />
                         </StackPanel>
 
-                        <TextBlock Text="{Binding [Findingsbycategory], Source={StaticResource AppText}}" Style="{StaticResource CaptionStrongTextStyle}"
-                                   Visibility="{x:Bind ViewModel.FindingSections.Count, Mode=OneWay, Converter={StaticResource NonZeroCountToVisibilityConverter}}" />
-                        <ItemsControl ItemsSource="{x:Bind ViewModel.FindingSections, Mode=OneWay}">
+                        <ItemsControl x:Name="AllFindingsList" ItemsSource="{x:Bind ViewModel.FindingSections, Mode=OneWay}"
+                                      Visibility="{x:Bind ViewModel.ShowAllFindings, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                      AutomationProperties.Name="{Binding [Findingsbycategory], Source={StaticResource AppText}}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:FindingSection">
                                     <Expander Margin="0,0,0,8"
@@ -317,7 +356,7 @@
                         </StackPanel>
                         <StackPanel Padding="0,20" Spacing="4" HorizontalAlignment="Center" Visibility="{x:Bind ViewModel.ShowNoFilterMatches, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                             <TextBlock Text="{Binding [Nomatchingfindings], Source={StaticResource AppText}}" Style="{StaticResource BodyStrongTextStyle}" HorizontalAlignment="Center" />
-                            <TextBlock Text="{Binding [Chooseanothersourceorseverityfilter], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding [Tryadifferentsearchsourceorseverity], Source={StaticResource AppText}}" Style="{StaticResource CaptionTextStyle}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" />
                         </StackPanel>
                     </StackPanel>
                 </Border>

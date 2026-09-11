@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -8,6 +9,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using LocalSecurityAudit.Models;
@@ -15,12 +17,22 @@ using LocalSecurityAudit.Models;
 namespace LocalSecurityAudit.Services;
 
 public sealed record AiKernelStatus(string Kernel, bool Installed, string Version, string Path);
+public sealed record AiKernelUpdateResult(AiKernelStatus Status, string LatestVersion, bool Changed, bool UsedBundledArchive = false);
 
 /// <summary>Installs optional Codex and Pi command-line kernels outside the application package.</summary>
 public sealed class KernelManagerService
 {
     private static readonly HttpClient Client = CreateClient();
+    private static readonly ConcurrentDictionary<string, (long Length, long Modified, string Version)> Versions = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _kernelRoot;
+    private readonly HttpClient? _client;
+    private readonly SemaphoreSlim _installGate = new(1, 1);
+
+    internal KernelManagerService(string kernelRoot, HttpClient client)
+    {
+        _kernelRoot = Path.GetFullPath(kernelRoot);
+        _client = client;
+    }
 
     public KernelManagerService()
     {
@@ -35,103 +47,119 @@ public sealed class KernelManagerService
     public AiKernelStatus GetStatus(string? kernel)
     {
         string normalized = AiKernelCatalog.Normalize(kernel);
-        if (normalized == AiKernelCatalog.Http)
-        {
-            return new(normalized, true, "built-in", string.Empty);
-        }
-
         string executableName = ExecutableName(normalized);
         string[] candidates =
         {
+            Path.Combine(_kernelRoot, normalized, executableName),
             Path.Combine(AppContext.BaseDirectory, executableName),
-            Path.Combine(AppContext.BaseDirectory, "kernels", executableName),
-            Path.Combine(_kernelRoot, normalized, executableName)
+            Path.Combine(AppContext.BaseDirectory, "kernels", executableName)
         };
-        string path = candidates.FirstOrDefault(File.Exists) ?? candidates[^1];
-        if (!File.Exists(path))
+        string path = candidates.FirstOrDefault(candidate => IsCompleteInstallation(normalized, candidate))
+            ?? candidates.FirstOrDefault(File.Exists) ?? candidates[0];
+        if (!IsCompleteInstallation(normalized, path))
         {
             return new(normalized, false, string.Empty, path);
         }
 
-        string version;
-        try
-        {
-            version = FileVersionInfo.GetVersionInfo(path).FileVersion?.Trim() ?? string.Empty;
-        }
-        catch
-        {
-            version = string.Empty;
-        }
+        return new(normalized, true, ReadInstalledVersion(normalized, path), path);
+    }
 
-        return new(normalized, true, string.IsNullOrWhiteSpace(version) ? "installed" : version, path);
+    public async Task<AiKernelStatus> GetStatusAsync(string? kernel, CancellationToken cancellationToken = default)
+    {
+        var status = GetStatus(kernel);
+        if (!status.Installed) return status;
+        string version = await VerifyExecutableAsync(status.Kernel, status.Path, cancellationToken);
+        var file = new FileInfo(status.Path);
+        Versions[status.Path] = (file.Length, file.LastWriteTimeUtc.Ticks, version);
+        return status with { Version = version };
     }
 
     public async Task<string> CheckLatestVersionAsync(string? kernel, CancellationToken cancellationToken = default)
     {
         string normalized = AiKernelCatalog.Normalize(kernel);
-        if (normalized == AiKernelCatalog.Http)
-        {
-            return "built-in";
-        }
-
-        using var response = await Client.GetAsync(LatestReleaseUrl(normalized), cancellationToken);
+        using var response = await (_client ?? Client).GetAsync(LatestReleaseUrl(normalized), cancellationToken);
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-        return document.RootElement.TryGetProperty("tag_name", out var tag)
-            ? tag.GetString()?.Trim() ?? "unknown"
-            : "unknown";
+        return ReleaseVersion(document.RootElement);
     }
 
-    public async Task<AiKernelStatus> DownloadOrUpdateAsync(
+    public async Task<AiKernelUpdateResult> DownloadOrUpdateAsync(
         string? kernel,
         IProgress<double>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        await _installGate.WaitAsync(cancellationToken);
+        try { return await InstallIfNewerAsync(kernel, progress, cancellationToken); }
+        finally { _installGate.Release(); }
+    }
+
+    private async Task<AiKernelUpdateResult> InstallIfNewerAsync(
+        string? kernel, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
         string normalized = AiKernelCatalog.Normalize(kernel);
-        if (normalized == AiKernelCatalog.Http)
+        var installed = await GetStatusAsync(normalized, cancellationToken);
+        (string Version, string DownloadUrl, string Digest) release = (string.Empty, string.Empty, string.Empty);
+        bool bundled = false;
+        try
         {
-            return GetStatus(normalized);
+            release = await GetReleaseAssetAsync(normalized, cancellationToken);
+            if (installed.Installed && CompareVersions(installed.Version, release.Version) >= 0)
+                return new(installed, release.Version, false);
+            if (string.IsNullOrWhiteSpace(release.DownloadUrl) || release.Digest.Length != 64 || !release.Digest.All(Uri.IsHexDigit))
+                throw new InvalidDataException($"The latest {normalized} release has no verified Windows archive digest.");
+        }
+        catch (HttpRequestException) when (!File.Exists(installed.Path) && BundledArchivePath(normalized) != null)
+        {
+            bundled = true;
         }
 
         Directory.CreateDirectory(_kernelRoot);
         string tempZip = Path.Combine(_kernelRoot, $".{normalized}-{Guid.NewGuid():N}.zip");
         string tempDirectory = Path.Combine(_kernelRoot, $".{normalized}-{Guid.NewGuid():N}");
         string targetDirectory = Path.Combine(_kernelRoot, normalized);
-        string targetPath = Path.Combine(targetDirectory, ExecutableName(normalized));
+        string backupDirectory = Path.Combine(_kernelRoot, $".{normalized}-previous-{Guid.NewGuid():N}");
+        string rootBoundary = Path.GetFullPath(_kernelRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (new[] { tempZip, tempDirectory, targetDirectory, backupDirectory }.Any(path =>
+            !Path.GetFullPath(path).StartsWith(rootBoundary, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("Kernel installation path escaped its data directory.");
         try
         {
-            string? expectedSha256 = null;
+            string? expectedSha256 = bundled ? BundledArchiveSha256(normalized) : release.Digest;
             try
             {
-                var releaseAsset = await GetReleaseAssetAsync(normalized, cancellationToken);
-                expectedSha256 = releaseAsset.Digest;
-                using var response = await Client.GetAsync(releaseAsset.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-                response.EnsureSuccessStatusCode();
-                long? contentLength = response.Content.Headers.ContentLength;
-                await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-                await using var destination = new FileStream(tempZip, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, true);
-                var buffer = new byte[64 * 1024];
-                long total = 0;
-                int read;
-                while ((read = await source.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
+                if (bundled)
                 {
-                    total += read;
-                    if (total > 512L * 1024 * 1024)
-                    {
-                        throw new InvalidDataException("AI kernel archive is larger than the supported limit.");
-                    }
-
-                    await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                    if (contentLength is > 0)
-                    {
-                        progress?.Report(Math.Clamp(total / (double)contentLength.Value, 0, 1));
-                    }
+                    if (!TryCopyBundledArchive(normalized, tempZip, out expectedSha256))
+                        throw new InvalidDataException("The bundled AI kernel archive is unavailable.");
                 }
+                else
+                {
+                    progress?.Report(0);
+                    using var response = await (_client ?? Client).GetAsync(release.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                    response.EnsureSuccessStatusCode();
+                    long? contentLength = response.Content.Headers.ContentLength;
+                    await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
+                    await using var destination = new FileStream(tempZip, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, true);
+                    var buffer = new byte[64 * 1024];
+                    long total = 0;
+                    int read;
+                    while ((read = await source.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
+                    {
+                        total += read;
+                        if (total > 512L * 1024 * 1024)
+                            throw new InvalidDataException("AI kernel archive is larger than the supported limit.");
 
-                await destination.FlushAsync(cancellationToken);
+                        await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                        if (contentLength is > 0)
+                            progress?.Report(Math.Clamp(total / (double)contentLength.Value, 0, 1));
+                    }
+
+                    await destination.FlushAsync(cancellationToken);
+                }
             }
-            catch (HttpRequestException) when (TryCopyBundledArchive(normalized, tempZip, out expectedSha256))
+            catch (HttpRequestException) when (!File.Exists(installed.Path) && TryCopyBundledArchive(normalized, tempZip, out expectedSha256))
             {
+                bundled = true;
                 progress?.Report(0.25);
             }
 
@@ -147,17 +175,10 @@ public sealed class KernelManagerService
                     $"The {normalized} archive SHA-256 does not match the official release digest.");
             }
 
-            Directory.CreateDirectory(tempDirectory);
-            string stagedPath = Path.Combine(tempDirectory, ExecutableName(normalized));
+            string stagedPath;
             using (var archive = ZipFile.OpenRead(tempZip))
             {
-                var entry = FindExecutableEntry(normalized, archive.Entries);
-                if (entry == null)
-                    throw new InvalidDataException($"The {normalized} archive did not contain a supported Windows CLI executable.");
-
-                using var input = entry.Open();
-                using var output = new FileStream(stagedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                input.CopyTo(output);
+                stagedPath = ExtractKernelArchive(normalized, archive, tempDirectory);
             }
 
             if (new FileInfo(stagedPath).Length < 16 * 1024)
@@ -165,12 +186,31 @@ public sealed class KernelManagerService
                 throw new InvalidDataException("The downloaded AI kernel executable is unexpectedly small.");
             }
 
-            await VerifyExecutableAsync(normalized, stagedPath, cancellationToken);
+            string version = await VerifyExecutableAsync(normalized, stagedPath, cancellationToken);
+            if (!bundled && CompareVersions(version, release.Version) != 0)
+                throw new InvalidDataException("The kernel executable version does not match its release.");
+            var stagedFile = new FileInfo(stagedPath);
+            await File.WriteAllTextAsync(Path.Combine(tempDirectory, "kernel-version.json"),
+                JsonSerializer.Serialize(new { Version = version, Length = stagedFile.Length, Modified = stagedFile.LastWriteTimeUtc.Ticks }),
+                cancellationToken);
 
-            Directory.CreateDirectory(targetDirectory);
-            File.Move(stagedPath, targetPath, true);
+            cancellationToken.ThrowIfCancellationRequested();
+            bool hadInstallation = Directory.Exists(targetDirectory);
+            try { if (hadInstallation) await MoveKernelDirectoryAsync(targetDirectory, backupDirectory, cancellationToken); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new IOException(AppText.Get("The kernel installation is in use or cannot be replaced. Close active kernel processes and retry."), ex);
+            }
+            try { await MoveKernelDirectoryAsync(tempDirectory, targetDirectory, cancellationToken); }
+            catch
+            {
+                if (hadInstallation && !Directory.Exists(targetDirectory))
+                    await MoveKernelDirectoryAsync(backupDirectory, targetDirectory, CancellationToken.None);
+                throw;
+            }
+            TryDeleteDirectory(backupDirectory);
             progress?.Report(1);
-            return GetStatus(normalized);
+            return new(GetStatus(normalized), bundled ? string.Empty : release.Version, true, bundled);
         }
         finally
         {
@@ -193,7 +233,7 @@ public sealed class KernelManagerService
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("LocalSecurityAudit", "0.3.8"));
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("LocalSecurityAudit", "0.3.9"));
         return client;
     }
 
@@ -236,15 +276,82 @@ public sealed class KernelManagerService
         _ => null
     };
 
-    private async Task<(string DownloadUrl, string Digest)> GetReleaseAssetAsync(
+    private static string ParseVersion(string value)
+    {
+        var match = Regex.Match(value, @"(?<![\w.])\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?![\w.+-])");
+        // GitHub tags can prefix the semantic version with 'v' or 'rust-v'.
+        if (!match.Success && (value.StartsWith("rust-v", StringComparison.Ordinal) || value.StartsWith('v')))
+            return ParseVersion(value[(value.StartsWith("rust-v", StringComparison.Ordinal) ? 6 : 1)..]);
+        return match.Success ? match.Value : throw new InvalidDataException("The kernel version could not be determined.");
+    }
+
+    private static string ReleaseVersion(JsonElement release) => release.TryGetProperty("tag_name", out var tag)
+        && tag.ValueKind == JsonValueKind.String ? ParseVersion(tag.GetString()!)
+        : throw new InvalidDataException("The official release has no version tag.");
+
+    internal static int CompareVersions(string local, string remote)
+    {
+        string[] left = ParseVersion(local).Split('+')[0].Split('-', 2);
+        string[] right = ParseVersion(remote).Split('+')[0].Split('-', 2);
+        int comparison = Version.Parse(left[0]).CompareTo(Version.Parse(right[0]));
+        if (comparison != 0) return comparison;
+        if (left.Length == 1 || right.Length == 1) return right.Length.CompareTo(left.Length);
+        string[] leftParts = left[1].Split('.'), rightParts = right[1].Split('.');
+        for (int i = 0; i < Math.Min(leftParts.Length, rightParts.Length); i++)
+        {
+            bool leftNumeric = leftParts[i].All(char.IsAsciiDigit), rightNumeric = rightParts[i].All(char.IsAsciiDigit);
+            comparison = leftNumeric && rightNumeric
+                ? leftParts[i].Length.CompareTo(rightParts[i].Length)
+                : leftNumeric != rightNumeric ? (leftNumeric ? -1 : 1) : 0;
+            if (comparison == 0) comparison = string.CompareOrdinal(leftParts[i], rightParts[i]);
+            if (comparison != 0) return comparison;
+        }
+        return leftParts.Length.CompareTo(rightParts.Length);
+    }
+
+    private static string ReadInstalledVersion(string kernel, string path)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            if (Versions.TryGetValue(path, out var cached)
+                && cached.Length == file.Length && cached.Modified == file.LastWriteTimeUtc.Ticks)
+                return cached.Version;
+            string manifest = Path.Combine(file.DirectoryName!, "kernel-version.json");
+            if (File.Exists(manifest))
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(manifest));
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Object
+                    && root.TryGetProperty("Length", out var length) && length.ValueKind == JsonValueKind.Number && length.TryGetInt64(out long savedLength) && savedLength == file.Length
+                    && root.TryGetProperty("Modified", out var modified) && modified.ValueKind == JsonValueKind.Number && modified.TryGetInt64(out long ticks) && ticks == file.LastWriteTimeUtc.Ticks
+                    && root.TryGetProperty("Version", out var version) && version.ValueKind == JsonValueKind.String)
+                    return ParseVersion(version.GetString()!);
+            }
+            if (kernel == AiKernelCatalog.Pi)
+            {
+                using var package = JsonDocument.Parse(File.ReadAllText(Path.Combine(file.DirectoryName!, "package.json")));
+                if (package.RootElement.ValueKind == JsonValueKind.Object
+                    && package.RootElement.TryGetProperty("version", out var version) && version.ValueKind == JsonValueKind.String)
+                    return ParseVersion(version.GetString()!);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        return string.Empty;
+    }
+
+    private async Task<(string Version, string DownloadUrl, string Digest)> GetReleaseAssetAsync(
         string kernel,
         CancellationToken cancellationToken)
     {
-        using var response = await Client.GetAsync(LatestReleaseUrl(kernel), cancellationToken);
+        using var response = await (_client ?? Client).GetAsync(LatestReleaseUrl(kernel), cancellationToken);
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(cancellationToken));
+        string version = ReleaseVersion(document.RootElement);
         string archiveName = ArchiveName(kernel);
-        foreach (var asset in document.RootElement.GetProperty("assets").EnumerateArray())
+        if (!document.RootElement.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
+            return (version, string.Empty, string.Empty);
+        foreach (var asset in assets.EnumerateArray())
         {
             if (!asset.TryGetProperty("name", out var name)
                 || !string.Equals(name.GetString(), archiveName, StringComparison.OrdinalIgnoreCase))
@@ -260,12 +367,10 @@ public sealed class KernelManagerService
             string? url = asset.TryGetProperty("browser_download_url", out var urlElement)
                 ? urlElement.GetString()
                 : null;
-            if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(digest))
-                break;
-            return (url, digest.Trim());
+            return (version, url ?? string.Empty, digest?.Trim() ?? string.Empty);
         }
 
-        throw new InvalidDataException($"The latest {kernel} release has no verified Windows archive digest.");
+        return (version, string.Empty, string.Empty);
     }
 
     private static string ArchiveName(string kernel) => kernel switch
@@ -289,8 +394,40 @@ public sealed class KernelManagerService
         }
 
         return candidates.FirstOrDefault(entry => string.Equals(entry.Name, "codex-x86_64-pc-windows-msvc.exe", StringComparison.OrdinalIgnoreCase))
-            ?? candidates.FirstOrDefault(entry => string.Equals(entry.Name, "codex-command-runner.exe", StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault(entry => string.Equals(entry.Name, "codex.exe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsCompleteInstallation(string kernel, string executable) => File.Exists(executable)
+        && (kernel != AiKernelCatalog.Pi || new[] { "package.json", "theme/dark.json", "theme/light.json" }
+            .All(relative => File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, relative))));
+
+    private static string ExtractKernelArchive(string kernel, ZipArchive archive, string directory)
+    {
+        var executable = FindExecutableEntry(kernel, archive.Entries)
+            ?? throw new InvalidDataException($"The {kernel} archive did not contain a supported Windows CLI executable.");
+        string boundary = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        string prefix = executable.FullName[..(executable.FullName.LastIndexOf('/') + 1)];
+        var entries = kernel == AiKernelCatalog.Pi
+            ? archive.Entries.Where(entry => entry.FullName.StartsWith(prefix, StringComparison.Ordinal))
+            : new[] { executable };
+        long extractedBytes = 0;
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrEmpty(entry.Name)) continue;
+            extractedBytes = checked(extractedBytes + entry.Length);
+            if (extractedBytes > 512L * 1024 * 1024) throw new InvalidDataException("Extracted kernel exceeds the supported limit.");
+            string relative = entry == executable ? ExecutableName(kernel) : entry.FullName[prefix.Length..];
+            string path = Path.GetFullPath(Path.Combine(directory, relative));
+            if (!path.StartsWith(boundary, StringComparison.OrdinalIgnoreCase) || relative.Contains(':'))
+                throw new InvalidDataException("Kernel archive contains an unsafe path.");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using var input = entry.Open();
+            using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            input.CopyTo(output);
+        }
+        string stagedPath = Path.Combine(directory, ExecutableName(kernel));
+        if (!IsCompleteInstallation(kernel, stagedPath)) throw new InvalidDataException("Kernel archive is missing runtime resources.");
+        return stagedPath;
     }
 
     private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
@@ -300,36 +437,71 @@ public sealed class KernelManagerService
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    private static async Task VerifyExecutableAsync(string kernel, string path, CancellationToken cancellationToken)
+    private static async Task MoveKernelDirectoryAsync(string source, string destination, CancellationToken cancellationToken)
     {
-        using var process = new Process
+        // Pi/Bun can leave the executable directory briefly locked after --version exits.
+        // Retry only Windows access/sharing violations, with at most 3.1 seconds of delay.
+        for (int attempt = 0; ; attempt++)
         {
-            StartInfo = new ProcessStartInfo
+            cancellationToken.ThrowIfCancellationRequested();
+            try
             {
-                FileName = path,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
+                Directory.Move(source, destination);
+                return;
             }
-        };
-        process.StartInfo.ArgumentList.Add("--version");
-        if (!process.Start()) throw new InvalidDataException($"The {kernel} executable could not be started.");
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+            catch (Exception ex) when (attempt < 5 && (ex is IOException or UnauthorizedAccessException)
+                && (ex.HResult & 0xffff) is 5 or 32 or 33)
+            {
+                await Task.Delay(100 << attempt, cancellationToken);
+            }
+        }
+    }
+
+    private static async Task<string> VerifyExecutableAsync(string kernel, string path, CancellationToken cancellationToken)
+    {
+        string probeRoot = Path.Combine(Path.GetTempPath(), $"essential-kernel-version-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(probeRoot);
         try
         {
-            await process.WaitForExitAsync(timeout.Token);
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = path,
+                    WorkingDirectory = probeRoot,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+            process.StartInfo.Environment["CODEX_HOME"] = probeRoot;
+            process.StartInfo.Environment["PI_CODING_AGENT_DIR"] = probeRoot;
+            process.StartInfo.Environment["PI_OFFLINE"] = "1";
+            process.StartInfo.Environment["PI_SKIP_VERSION_CHECK"] = "1";
+            process.StartInfo.Environment["PI_TELEMETRY"] = "0";
+            process.StartInfo.ArgumentList.Add("--version");
+            if (!process.Start()) throw new InvalidDataException($"The {kernel} executable could not be started.");
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(20));
+            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token);
+                string output = (await stdout).Trim();
+                await stderr;
+                if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
+                    throw new InvalidDataException($"The {kernel} archive did not contain a runnable CLI executable.");
+                return ParseVersion(output);
+            }
+            catch (OperationCanceledException)
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+                throw;
+            }
         }
-        catch (OperationCanceledException)
-        {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
-
-        string output = (await process.StandardOutput.ReadToEndAsync(timeout.Token)).Trim();
-        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
-            throw new InvalidDataException($"The {kernel} archive did not contain a runnable CLI executable.");
+        finally { TryDeleteDirectory(probeRoot); }
     }
 
     private static void TryDeleteFile(string path)

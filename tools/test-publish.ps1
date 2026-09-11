@@ -13,14 +13,14 @@ function Assert-True([bool]$Condition, [string]$Message) { if (-not $Condition) 
 
 $files = @(Get-ChildItem -LiteralPath $packageRoot -File -Recurse)
 $unexpected = @($files | Where-Object {
-    $_.Name -in 'settings.json', 'API.txt', 'appsettings.local.json', 'secrets.json' -or
+    $_.Name -in 'settings.json', 'API.txt', 'appsettings.local.json', 'secrets.json', 'AGENTS.md', 'collect-assistant-events.ps1', 'publish-assistant-audit.py', 'codex-x86_64-pc-windows-msvc.exe.zip', 'pi-windows-x64.zip' -or
     $_.Name -match '\.db(?:-wal|-shm)?$|\.log$|(?:evidence|result|analysis|diagnostic)[^\\]*\.(?:json|txt)$' -or
-    ($_.Extension -eq '.json' -and $_.Name -notin 'LocalSecurityAudit.deps.json', 'LocalSecurityAudit.runtimeconfig.json')
+    ($_.Extension -eq '.json' -and $_.Name -notin 'Essential.deps.json', 'Essential.runtimeconfig.json')
 })
 Assert-True ($unexpected.Count -eq 0) 'The package contains user configuration, logs or audit data.'
 'PASS Package contains no user configuration, logs or audit data.'
 
-foreach ($relative in 'LocalSecurityAudit.exe', 'LocalSecurityAudit.dll', 'resources.pri', 'Assets/app.ico',
+foreach ($relative in 'Essential.exe', 'Essential.dll', 'resources.pri', 'Assets/app.ico',
     'Assets/logo-light-32.png', 'Assets/logo-light-48.png', 'Assets/logo-light-256.png',
     'Assets/logo-dark-32.png', 'Assets/logo-dark-48.png', 'Assets/logo-dark-256.png',
     'Microsoft.ui.xaml.dll', 'Microsoft.Graphics.Canvas.dll', 'Microsoft.Graphics.Canvas.Interop.dll',
@@ -28,12 +28,12 @@ foreach ($relative in 'LocalSecurityAudit.exe', 'LocalSecurityAudit.dll', 'resou
     'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
     Assert-True (Test-Path -LiteralPath (Join-Path $packageRoot $relative) -PathType Leaf) ('Missing required runtime/resource: ' + $relative)
 }
-$runtime = Get-Content -LiteralPath (Join-Path $packageRoot 'LocalSecurityAudit.runtimeconfig.json') -Raw | ConvertFrom-Json
+$runtime = Get-Content -LiteralPath (Join-Path $packageRoot 'Essential.runtimeconfig.json') -Raw | ConvertFrom-Json
 Assert-True ($null -eq $runtime.runtimeOptions.framework -and $null -eq $runtime.runtimeOptions.frameworks -and
     @($runtime.runtimeOptions.includedFrameworks | Where-Object name -eq 'Microsoft.NETCore.App').Count -eq 1) 'The package is not .NET self-contained.'
 'PASS Self-contained runtime, WinUI/Win2D, chart/SQLite natives and app assets are present.'
 
-foreach ($name in 'LocalSecurityAudit.exe', 'coreclr.dll', 'Microsoft.ui.xaml.dll', 'Microsoft.Graphics.Canvas.dll',
+foreach ($name in 'Essential.exe', 'coreclr.dll', 'Microsoft.ui.xaml.dll', 'Microsoft.Graphics.Canvas.dll',
     'libSkiaSharp.dll', 'e_sqlite3.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
     $reader = [IO.BinaryReader]::new([IO.File]::OpenRead((Join-Path $packageRoot $name)))
     try {
@@ -45,19 +45,19 @@ foreach ($name in 'LocalSecurityAudit.exe', 'coreclr.dll', 'Microsoft.ui.xaml.dl
     }
     finally { $reader.Dispose() }
 }
-$exe = Join-Path $packageRoot 'LocalSecurityAudit.exe'
+$exe = Join-Path $packageRoot 'Essential.exe'
 Assert-True ([Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductVersion -eq $expectedVersion) 'The package has a stale version.'
+Assert-True ([Reflection.Assembly]::LoadFrom((Join-Path $packageRoot 'Essential.dll')).EntryPoint.DeclaringType.FullName -eq 'LocalSecurityAudit.Program') 'The package contains a test entry point.'
 Assert-True ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($exe)).Contains('level="asInvoker"')) 'The package would require administrator rights at startup.'
 'PASS Version, x64 architecture and ordinary-permission startup manifest match.'
 
-foreach ($relative in 'AGENTS.md', 'tools/collect-assistant-events.ps1', 'tools/publish-assistant-audit.py',
-    'Assets/app.ico', 'Assets/logo-light-32.png', 'Assets/logo-light-48.png', 'Assets/logo-light-256.png',
+foreach ($relative in 'Assets/app.ico', 'Assets/logo-light-32.png', 'Assets/logo-light-48.png', 'Assets/logo-light-256.png',
     'Assets/logo-dark-32.png', 'Assets/logo-dark-48.png', 'Assets/logo-dark-256.png') {
     $sourceHash = (Get-FileHash -LiteralPath (Join-Path $sourceRoot $relative)).Hash
     $packageHash = (Get-FileHash -LiteralPath (Join-Path $packageRoot $relative)).Hash
     Assert-True ($sourceHash -eq $packageHash) ('Stale packaged protocol/tool/asset: ' + $relative)
 }
-'PASS Packaged protocol, tools and app assets match the source.'
+'PASS Packaged app assets match the source.'
 
 if ($ZipPath) {
     $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ZipPath).Path)

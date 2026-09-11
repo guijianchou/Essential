@@ -42,14 +42,13 @@ public static class Program
             return 0;
         }
 
-        string? modeOverride = args.Contains("--assistant", StringComparer.OrdinalIgnoreCase) ? AppMode.Assistant
-            : args.Contains("--full", StringComparer.OrdinalIgnoreCase) ? AppMode.Full
+        string? modeOverride = args.Contains("--full", StringComparer.OrdinalIgnoreCase) ? AppMode.Full
             : args.Contains("--extended", StringComparer.OrdinalIgnoreCase) ? AppMode.Extended : null;
         var settings = new SettingsService(modeOverride);
         bool elevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
         if (!AppMode.RequiresElevation(settings.ActiveMode) && elevated)
         {
-            ShowStartupMessage("Assistant and extended modes run without administrator privileges. Open the app normally from File Explorer, or choose full-access mode.");
+            ShowStartupMessage("Extended mode runs without administrator privileges. Open the app normally from File Explorer, or choose full-access mode.");
             return 1;
         }
         if (AppMode.RequiresElevation(settings.ActiveMode) && !elevated)
@@ -73,18 +72,18 @@ public static class Program
             }
             catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
             {
-                ShowStartupMessage("Administrator approval was canceled. Opening assistant mode; the saved startup mode and extended database are unchanged.");
+                ShowStartupMessage("Administrator approval was canceled. Opening extended mode; the saved startup mode and database are unchanged.");
             }
             catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
             {
-                ShowStartupMessage("Full-access mode could not start. Opening assistant mode; the saved startup mode and existing databases are unchanged.");
+                ShowStartupMessage("Full-access mode could not start. Opening extended mode; the saved startup mode and database are unchanged.");
             }
             if (!instance.TryAcquire())
             {
                 instance.ActivateExisting();
                 return 0;
             }
-            settings = new SettingsService(AppMode.Assistant);
+            settings = new SettingsService(AppMode.Extended);
         }
 
         instance.Listen(OnInstanceActivated);
@@ -100,7 +99,7 @@ public static class Program
     }
 
     private static void ShowStartupMessage(string message) => MessageBox(IntPtr.Zero,
-        AppText.Get(message), AppText.Get("Local Security Audit"), 0x40);
+        AppText.Get(message), AppText.Get("Essential"), 0x40);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int MessageBox(IntPtr window, string text, string caption, uint type);

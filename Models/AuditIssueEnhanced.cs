@@ -124,8 +124,8 @@ public class AuditIssueEnhanced
         {
             var parts = new List<string>();
             if (!string.IsNullOrWhiteSpace(LogName)) parts.Add(LogName);
-            if (!string.IsNullOrWhiteSpace(Source)) parts.Add(Source);
             if (HasEventId) parts.Add(EventIdLabel);
+            if (!string.IsNullOrWhiteSpace(Source)) parts.Add(Source);
             if (!string.IsNullOrWhiteSpace(EventRecordId)) parts.Add(AppText.Format("record {0}", EventRecordId));
             if (!string.IsNullOrWhiteSpace(UserName)) parts.Add(AppText.Format("account {0}", UserName));
             if (!string.IsNullOrWhiteSpace(IpAddress)) parts.Add(AppText.Format("source {0}", IpAddress));

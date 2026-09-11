@@ -25,7 +25,7 @@ public sealed partial class FindingDetailsDialog : ContentDialog
     {
         Issue = issue;
         AddEvidence("Analysis model", issue.ModelLabel);
-        AddEvidence("Optimization", issue.ModelHistoryText);
+        AddEvidence("Model history", issue.ModelHistoryText);
         AddEvidence("Event ID", issue.EventId);
         AddEvidence("Log", issue.LogName);
         AddEvidence("Source", issue.Source);

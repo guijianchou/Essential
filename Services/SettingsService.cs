@@ -10,11 +10,11 @@ namespace LocalSecurityAudit.Services;
 public sealed class SettingsService
 {
     /// <summary>
-    /// The audit policy sent to the model with every batch. It is also written to
-    /// AGENTS.md next to the settings file so it can be edited as plain text. Keep it
+    /// The security-audit policy sent to the model with every batch. It is also written to
+    /// chains/security-audit/AGENTS.md so it can be edited as plain text. Keep it
     /// aligned with the hard output contract in <c>AiAnalysisService.BuildSystemPrompt</c>.
     /// </summary>
-    public const string DefaultAgentInstructions = """
+    public const string DefaultSecurityAuditInstructions = """
         # Local Security Audit policy
 
         You review Windows event-log records from one workstation and return findings that a
@@ -152,7 +152,7 @@ public sealed class SettingsService
         {"issues":[{"key":"failed_logon_burst","eventRef":"event-4","eventId":"4625","eventTimestamp":"2026-01-01T00:00:00Z","title":"Six failed logons for jdoe within two minutes","description":"Six 4625 events for jdoe from 192.168.1.20 failed with a bad password between 00:00 and 00:02 and no successful logon followed.","severity":"Medium","confidence":"High","category":"Login","affected":"jdoe from 192.168.1.20","rootCause":"Most likely a mistyped or expired password, although a password-guessing attempt cannot be excluded.","recommendation":"Confirm with the user, check that 192.168.1.20 is a known device, and review later 4624 events for the same account.","occurrences":6,"relatedEventRefs":["event-4","event-5","event-6","event-7","event-8","event-9"],"titleZh":"两分钟内发生六次 jdoe 登录失败","descriptionZh":"jdoe 从 192.168.1.20 发起的六次 4625 登录在 00:00 至 00:02 因密码错误失败，之后未出现成功登录。","rootCauseZh":"可能是密码输入错误或已过期，也不能排除密码猜测。","recommendationZh":"与用户确认，核对 192.168.1.20 是否为已知设备，并检查同一账号后续的 4624 事件。"}]}
         """;
 
-    private const string PreviousEnglishAgentInstructions = """
+    private const string PreviousEnglishSecurityAuditInstructions = """
         # Local Security Audit policy
 
         You review Windows event-log records from one workstation and return findings that a
@@ -275,11 +275,11 @@ public sealed class SettingsService
 
     /// <summary>
     /// Earlier shipped defaults. When the stored policy still equals one of these verbatim the
-    /// user never customized it, so it is upgraded to <see cref="DefaultAgentInstructions"/>.
+    /// user never customized it, so it is upgraded to <see cref="DefaultSecurityAuditInstructions"/>.
     /// </summary>
-    private static readonly string[] LegacyDefaultAgentInstructions =
+    private static readonly string[] LegacyDefaultSecurityAuditInstructions =
     {
-        PreviousEnglishAgentInstructions,
+        PreviousEnglishSecurityAuditInstructions,
         """
         # Local Security Audit policy
 
@@ -320,40 +320,55 @@ public sealed class SettingsService
     };
 
     private readonly string _settingsPath;
-    private readonly string _agentInstructionsPath;
+    private readonly string _securityAuditInstructionsPath;
+    private readonly string _legacyAgentInstructionsPath;
     private readonly bool _policyUpgraded;
 
     public AppSettings Current { get; private set; }
     // A saved mode change takes effect only in a new process. Never switch a live scanner's database.
     public string ActiveMode { get; }
-    public bool IsAssistantMode => ActiveMode == AppMode.Assistant;
     public bool IsFullMode => ActiveMode == AppMode.Full;
-    public string AgentInstructionsPath => _agentInstructionsPath;
+    public string SecurityAuditInstructionsPath => _securityAuditInstructionsPath;
     public string SettingsPath => _settingsPath;
+
+    public string GetTaskInstructions(string taskId)
+    {
+        HubTaskCatalog.Get(taskId);
+        return taskId switch
+        {
+            HubTaskCatalog.SecurityAuditId => Current.SecurityAuditInstructions,
+            _ => throw new ArgumentException("No instructions are configured for this Hub task.", nameof(taskId))
+        };
+    }
+
+    public string GetTaskInstructionsPath(string taskId)
+    {
+        HubTaskCatalog.Get(taskId);
+        return taskId switch
+        {
+            HubTaskCatalog.SecurityAuditId => _securityAuditInstructionsPath,
+            _ => throw new ArgumentException("No instruction file is configured for this Hub task.", nameof(taskId))
+        };
+    }
 
     public event EventHandler? SettingsChanged;
 
-    public SettingsService(string? startupMode = null)
+    public SettingsService(string? startupMode = null, string? dataDirectory = null)
     {
-        var appDataPath = Path.Combine(
+        var appDataPath = Path.GetFullPath(dataDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LocalSecurityAudit");
+            "LocalSecurityAudit"));
 
         Directory.CreateDirectory(appDataPath);
         _settingsPath = Path.Combine(appDataPath, "settings.json");
-        _agentInstructionsPath = Path.Combine(appDataPath, "AGENTS.md");
+        _securityAuditInstructionsPath = Path.Combine(appDataPath, "chains", HubTaskCatalog.SecurityAuditId, "AGENTS.md");
+        _legacyAgentInstructionsPath = Path.Combine(appDataPath, "AGENTS.md");
         Current = LoadSettings();
         ActiveMode = AppMode.Normalize(startupMode ?? Current.Mode);
         AppText.Current.SetLanguage(Current.Language);
-        _policyUpgraded = UpgradeLegacyAgentInstructions(Current);
-        EnsureAgentInstructionsFile(Current.AgentInstructions);
+        _policyUpgraded = UpgradeLegacySecurityAuditInstructions(Current);
+        EnsureSecurityAuditInstructionsFile(Current.SecurityAuditInstructions);
         PersistNormalizedSettingsIfNeeded();
-    }
-
-    public void EnsureExtendedMode()
-    {
-        if (IsAssistantMode)
-            throw new InvalidOperationException(AppText.Get("Assistant mode only displays external results. Switch to extended mode and reopen the app to use this action."));
     }
 
     public AppSettings CreateDefaultSettings()
@@ -372,7 +387,7 @@ public sealed class SettingsService
         }
 
         string normalized = NormalizePolicyText(instructions);
-        return LegacyDefaultAgentInstructions.Any(legacy => NormalizePolicyText(legacy) == normalized);
+        return LegacyDefaultSecurityAuditInstructions.Any(legacy => NormalizePolicyText(legacy) == normalized);
     }
 
     public void Save(AppSettings settings)
@@ -381,23 +396,24 @@ public sealed class SettingsService
 
         var json = JsonSerializer.Serialize(settings, SerializerOptions);
         // Do not report success while the policy loaded at restart still contains old text.
-        if (!File.Exists(_agentInstructionsPath)
-            || File.ReadAllText(_agentInstructionsPath) != settings.AgentInstructions)
-            File.WriteAllText(_agentInstructionsPath, settings.AgentInstructions);
+        Directory.CreateDirectory(Path.GetDirectoryName(_securityAuditInstructionsPath)!);
+        if (!File.Exists(_securityAuditInstructionsPath)
+            || File.ReadAllText(_securityAuditInstructionsPath) != settings.SecurityAuditInstructions)
+            File.WriteAllText(_securityAuditInstructionsPath, settings.SecurityAuditInstructions);
         File.WriteAllText(_settingsPath, json);
         Current = settings;
         AppText.Current.SetLanguage(settings.Language);
         SettingsChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private static bool UpgradeLegacyAgentInstructions(AppSettings settings)
+    private static bool UpgradeLegacySecurityAuditInstructions(AppSettings settings)
     {
-        if (!IsLegacyDefaultPolicy(settings.AgentInstructions))
+        if (!IsLegacyDefaultPolicy(settings.SecurityAuditInstructions))
         {
             return false;
         }
 
-        settings.AgentInstructions = DefaultAgentInstructions;
+        settings.SecurityAuditInstructions = DefaultSecurityAuditInstructions;
         return true;
     }
 
@@ -422,7 +438,8 @@ public sealed class SettingsService
                 || stored == null
                 || stored.Mode != Current.Mode
                 || stored.RetentionPolicyVersion != Current.RetentionPolicyVersion
-                || string.IsNullOrWhiteSpace(stored.AgentInstructions)
+                || string.IsNullOrWhiteSpace(stored.SecurityAuditInstructions)
+                || stored.LegacyAgentInstructions != null
                 || stored.AiTargets == null
                 || stored.AiTargets.Count == 0
                 || stored.AiTargets.Count != 2
@@ -459,8 +476,8 @@ public sealed class SettingsService
 
                 if (stored != null)
                 {
+                    stored.SecurityAuditInstructions = LoadSecurityAuditInstructions(stored.SecurityAuditInstructions, stored.LegacyAgentInstructions);
                     Normalize(stored);
-                    stored.AgentInstructions = LoadAgentInstructions(stored.AgentInstructions);
                     return stored;
                 }
             }
@@ -474,7 +491,9 @@ public sealed class SettingsService
             }
         }
 
-        return CreateDefaultSettings();
+        var defaults = CreateDefaultSettings();
+        defaults.SecurityAuditInstructions = LoadSecurityAuditInstructions(string.Empty, null);
+        return defaults;
     }
 
     private AppSettings CreateDefaults()
@@ -513,7 +532,7 @@ public sealed class SettingsService
 
         return new AppSettings
         {
-            AgentInstructions = DefaultAgentInstructions,
+            SecurityAuditInstructions = DefaultSecurityAuditInstructions,
             AiTargets =
             {
                 new AiTargetSettings
@@ -529,13 +548,18 @@ public sealed class SettingsService
         };
     }
 
-    private string LoadAgentInstructions(string fallback)
+    private string LoadSecurityAuditInstructions(string fallback, string? legacyFallback)
     {
-        if (File.Exists(_agentInstructionsPath))
+        // The scoped file wins. Once migrated, a missing scoped file uses the saved
+        // scoped copy, so an old shared file can never replace a newer audit policy.
+        foreach (string path in new[] { _securityAuditInstructionsPath, _legacyAgentInstructionsPath })
         {
+            if (path == _legacyAgentInstructionsPath && !string.IsNullOrWhiteSpace(fallback)) return fallback;
+            if (!File.Exists(path)) continue;
             try
             {
-                return File.ReadAllText(_agentInstructionsPath);
+                string instructions = File.ReadAllText(path);
+                if (!string.IsNullOrWhiteSpace(instructions)) return instructions;
             }
             catch (IOException)
             {
@@ -547,21 +571,21 @@ public sealed class SettingsService
             }
         }
 
-        return string.IsNullOrWhiteSpace(fallback)
-            ? DefaultAgentInstructions
-            : fallback;
+        return !string.IsNullOrWhiteSpace(fallback) ? fallback
+            : !string.IsNullOrWhiteSpace(legacyFallback) ? legacyFallback : DefaultSecurityAuditInstructions;
     }
 
-    private void EnsureAgentInstructionsFile(string instructions)
+    private void EnsureSecurityAuditInstructionsFile(string instructions)
     {
-        if (File.Exists(_agentInstructionsPath))
+        if (File.Exists(_securityAuditInstructionsPath))
         {
             return;
         }
 
         try
         {
-            File.WriteAllText(_agentInstructionsPath, instructions);
+            Directory.CreateDirectory(Path.GetDirectoryName(_securityAuditInstructionsPath)!);
+            File.WriteAllText(_securityAuditInstructionsPath, instructions);
         }
         catch (IOException)
         {
@@ -577,6 +601,7 @@ public sealed class SettingsService
     {
         settings.Mode = AppMode.Normalize(settings.Mode);
         settings.Language = settings.Language == "zh-CN" ? "zh-CN" : "en";
+        settings.TokenUsagePeriod = settings.TokenUsagePeriod is "week" or "month" ? settings.TokenUsagePeriod : "day";
         settings.Theme = settings.Theme is "system" or "light" or "dark"
             ? settings.Theme
             : "system";
@@ -600,17 +625,15 @@ public sealed class SettingsService
             3 or 7 or 14 or 30 => settings.RetentionDays,
             _ => 30
         };
-        settings.AgentInstructions = string.IsNullOrWhiteSpace(settings.AgentInstructions)
-            ? DefaultAgentInstructions
-            : settings.AgentInstructions;
+        settings.SecurityAuditInstructions = !string.IsNullOrWhiteSpace(settings.SecurityAuditInstructions) ? settings.SecurityAuditInstructions
+            : !string.IsNullOrWhiteSpace(settings.LegacyAgentInstructions) ? settings.LegacyAgentInstructions : DefaultSecurityAuditInstructions;
+        settings.LegacyAgentInstructions = null;
         settings.AiKernel = AiKernelCatalog.Normalize(settings.AiKernel);
         settings.MaxConcurrentAnalysis = settings.MaxConcurrentAnalysis <= 1
             ? 3
             : Math.Clamp(settings.MaxConcurrentAnalysis, 2, 4);
 
         settings.AiTargets ??= new();
-        settings.OptimizationModel = AiModelCatalog.Rank(settings.OptimizationModel) >= 0
-            ? AiModelCatalog.Normalize(settings.OptimizationModel) : AiModelCatalog.Astra;
         if (settings.AiTargets.Count == 0)
         {
             settings.AiTargets.Add(new AiTargetSettings());

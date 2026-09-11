@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Imaging;
 using LocalSecurityAudit.Models;
 
 namespace LocalSecurityAudit.Views;
@@ -16,15 +17,24 @@ public sealed partial class SettingsPage : Page
         InitializeComponent();
         DataContext = ViewModel;
         Loaded += OnLoaded;
+        ActualThemeChanged += OnActualThemeChanged;
+    }
+
+    private void OnActualThemeChanged(FrameworkElement sender, object args)
+    {
+        bool dark = ActualTheme == ElementTheme.Dark;
+        AboutLogo.Source = new BitmapImage(new Uri($"ms-appx:///Assets/logo-{(dark ? "dark" : "light")}-48.png"));
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        OnActualThemeChanged(this, EventArgs.Empty);
         // "--section=ai" (used by tooling) opens a specific settings section.
         string? requestedSection = Environment.GetCommandLineArgs()
             .Select(argument => argument.Trim())
             .FirstOrDefault(argument => argument.StartsWith("--section=", StringComparison.OrdinalIgnoreCase))
             ?["--section=".Length..].ToLowerInvariant();
+        if (requestedSection == HubTaskCatalog.SecurityAuditId) requestedSection = "hub";
         if (requestedSection != null)
         {
             var requestedItem = NavView.MenuItems
@@ -59,15 +69,9 @@ public sealed partial class SettingsPage : Page
 
     private void ShowSection(string tag)
     {
-        if (ViewModel.IsAssistantMode && tag is "ai" or "optimization" or "scanning")
-        {
-            NavView.SelectedItem = NavView.MenuItems[0];
-            tag = "mode";
-        }
         ModePage.Visibility = tag == "mode" ? Visibility.Visible : Visibility.Collapsed;
         AiPage.Visibility = tag == "ai" ? Visibility.Visible : Visibility.Collapsed;
-        OptimizationPage.Visibility = tag == "optimization" ? Visibility.Visible : Visibility.Collapsed;
-        if (tag == "optimization") _ = ViewModel.RefreshOptimizationPreviewCommand.ExecuteAsync(null);
+        HubPage.Visibility = tag == "hub" ? Visibility.Visible : Visibility.Collapsed;
         AppearancePage.Visibility = tag == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         ScanningPage.Visibility = tag == "scanning" ? Visibility.Visible : Visibility.Collapsed;
         StoragePage.Visibility = tag == "storage" ? Visibility.Visible : Visibility.Collapsed;

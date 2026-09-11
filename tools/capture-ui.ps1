@@ -5,7 +5,7 @@
 #   Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','tools\capture-ui.ps1','-Pages','dashboard,trends'
 # Output goes to ui-review\<page>.png and ui-review\capture.log.
 param(
-    [string]$ExePath = "$PSScriptRoot\..\bin\x64\Release\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.exe",
+    [string]$ExePath = "$PSScriptRoot\..\artifacts\bin\x64\Release\net8.0-windows10.0.19041.0\Essential.exe",
     [string]$OutDir = "$PSScriptRoot\..\ui-review",
     [string[]]$Pages = @("dashboard"),
     [int]$StartupSeconds = 8

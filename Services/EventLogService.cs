@@ -105,7 +105,6 @@ public class EventLogService
         CancellationToken cancellationToken = default,
         IProgress<AuditProgressEventArgs>? progress = null)
     {
-        _settingsService.EnsureExtendedMode();
         var stopwatch = Stopwatch.StartNew();
         _diagnosticLogService.Write(
             $"Event log read started: from={from:O}, to={to:O}");
@@ -168,7 +167,6 @@ public class EventLogService
         string xpathQuery,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        _settingsService.EnsureExtendedMode();
         if (logName == "Security" && !_settingsService.IsFullMode)
             throw new InvalidOperationException("Security collection is only enabled in full-access mode.");
         await Task.Run(() => { }, cancellationToken); // Ensure async context

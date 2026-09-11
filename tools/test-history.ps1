@@ -1,7 +1,7 @@
 # Exercises compiled history/storage code with synthetic data and memory SQLite.
 # Never activates WinUI, reads user settings/event logs, or calls AI endpoints.
 param(
-    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll"
+    [string]$AssemblyPath = "$PSScriptRoot\..\artifacts\bin\x64\Debug\net8.0-windows10.0.19041.0\Essential.dll"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -246,6 +246,10 @@ Test-Case 'Dashboard keeps its last successful display when storage or a scan fa
         $type.GetField('_storageService', $flags).SetValue($model, $storage)
         $schedulerType = $assembly.GetType('LocalSecurityAudit.Services.AuditSchedulerService', $true)
         $scheduler = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($schedulerType)
+        $settingsType = $assembly.GetType('LocalSecurityAudit.Services.SettingsService', $true)
+        $settings = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($settingsType)
+        $settingsType.GetField('<ActiveMode>k__BackingField', $flags).SetValue($settings, 'extended')
+        $schedulerType.GetField('_settingsService', $flags).SetValue($scheduler, $settings)
         $type.GetField('_schedulerService', $flags).SetValue($model, $scheduler)
         $type.GetField('_allIssues', $flags).SetValue($model, [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssueEnhanced]]::new())
         $type.GetField('severityFilter', $flags).SetValue($model, 'All')
@@ -383,6 +387,10 @@ Test-Case 'Dashboard days choose the latest readable scan on that local day and 
         $model = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
         $type.GetField('_storageService', $flags).SetValue($model, $storage)
         $scheduler = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($assembly.GetType('LocalSecurityAudit.Services.AuditSchedulerService', $true))
+        $settingsType = $assembly.GetType('LocalSecurityAudit.Services.SettingsService', $true)
+        $settings = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($settingsType)
+        $settingsType.GetField('<ActiveMode>k__BackingField', $flags).SetValue($settings, 'extended')
+        $scheduler.GetType().GetField('_settingsService', $flags).SetValue($scheduler, $settings)
         $type.GetField('_schedulerService', $flags).SetValue($model, $scheduler)
         $type.GetField('_allIssues', $flags).SetValue($model, [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssueEnhanced]]::new())
         $type.GetField('severityFilter', $flags).SetValue($model, 'All')
@@ -440,29 +448,6 @@ Test-Case 'Dashboard days choose the latest readable scan on that local day and 
         $model.SelectDayCommand.Execute($yesterday)
         $model.LoadDataCommand.ExecutionTask.GetAwaiter().GetResult()
         Assert-True (-not $model.HasAuditData -and $model.IsStatusVisible -and -not $model.IsDateLoading -and $model.SelectedAuditLabel -eq [LocalSecurityAudit.Services.AppText]::Format('Audit on {0:d}', $yesterday.Date)) 'A failed day selection retained another day or stayed loading.'
-    }
-}
-
-Test-Case 'Optimization saves only approved fields, recalculates score and refuses stale writes and downgrades' {
-    Use-HistoryDatabase {
-        param($storage, $connection)
-        $json = '[{"Key":"old","Title":"Old analysis","Description":"Old","RootCause":"Old cause","Recommendation":"Old action","Severity":"High","AnalysisModel":"gpt-5.6-luna","EventRecordId":"123","EventDescription":"Evidence","FutureField":{"keep":true}}]'
-        Add-Record $connection ([datetime]::Today) $json
-        $update = [LocalSecurityAudit.Models.AuditIssue]::new()
-        $update.Title = 'Reviewed'; $update.Description = 'Reviewed'; $update.RootCause = 'Reviewed'; $update.Recommendation = 'Reviewed'
-        $update.TitleZh = 'Reviewed zh'; $update.DescriptionZh = 'Reviewed zh'; $update.RootCauseZh = 'Reviewed zh'; $update.RecommendationZh = 'Reviewed zh'
-        $update.Severity = 'Low'; $update.Confidence = 'High'; $update.AnalysisModel = 'gpt-5.6-sol'; $update.EventRecordId = 'do-not-write'
-        $updates = [Collections.Generic.Dictionary[int,LocalSecurityAudit.Models.AuditIssue]]::new()
-        $updates.Add(0, $update)
-        $saved = $storage.UpdateOptimizedFindingsAsync(1, $json, $updates, 'gpt-5.6-sol', [Threading.CancellationToken]::None).GetAwaiter().GetResult()
-        Assert-True (-not [string]::IsNullOrEmpty($saved)) 'Upward optimization was not saved.'
-        $parsed = $saved | ConvertFrom-Json
-        Assert-True ($parsed[0].FutureField.keep -and $parsed[0].EventRecordId -eq '123' -and $parsed[0].EventDescription -eq 'Evidence' -and $parsed[0].OriginalAnalysisModel -eq 'gpt-5.6-luna') 'Unrelated evidence or original model was overwritten.'
-        $latest = $storage.GetLatestResultAsync().GetAwaiter().GetResult()
-        Assert-True ($latest.HealthScore -eq [LocalSecurityAudit.Services.HealthScoreCalculator]::Calculate($latest.Findings).Score) 'Stored score did not reflect optimized severity.'
-        Assert-True ($null -eq $storage.UpdateOptimizedFindingsAsync(1, $json, $updates, 'gpt-5.6-sol', [Threading.CancellationToken]::None).GetAwaiter().GetResult()) 'A stale result overwrote a concurrent update.'
-        $update.AnalysisModel = 'gpt-5.6-luna'
-        Assert-True ($null -eq $storage.UpdateOptimizedFindingsAsync(1, $saved, $updates, 'gpt-5.6-luna', [Threading.CancellationToken]::None).GetAwaiter().GetResult()) 'A lower model overwrote Sol.'
     }
 }
 

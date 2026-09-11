@@ -1,0 +1,526 @@
+// Compiled only by test-workflow-ui.ps1, replacing Program.Main in an isolated build.
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Text.Json;
+using LocalSecurityAudit.Models;
+using LocalSecurityAudit.Services;
+using LocalSecurityAudit.ViewModels;
+using LocalSecurityAudit.Views;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Graphics;
+using Windows.Graphics.Imaging;
+
+namespace LocalSecurityAudit;
+
+internal sealed class WorkflowUiRegression : App
+{
+    private static readonly string TestRoot = Environment.GetEnvironmentVariable("LSA_UI_TEST_ROOT")
+        ?? throw new InvalidOperationException("An isolated test directory is required.");
+    private const BindingFlags Fields = BindingFlags.Instance | BindingFlags.NonPublic;
+    private readonly SettingsService settings;
+
+    private WorkflowUiRegression(SettingsService settings) : base(settings) { this.settings = settings; }
+
+    [STAThread]
+    private static void Main()
+    {
+        // Do not use Program.Main, SettingsService's production constructor, or start the scheduler.
+        WinRT.ComWrappersSupport.InitializeComWrappers();
+        var settings = (SettingsService)RuntimeHelpers.GetUninitializedObject(typeof(SettingsService));
+        typeof(SettingsService).GetField("_settingsPath", Fields)!.SetValue(settings, Path.Combine(TestRoot, "settings.json"));
+        typeof(SettingsService).GetField("_securityAuditInstructionsPath", Fields)!.SetValue(settings, Path.Combine(TestRoot, "chains", "security-audit", "AGENTS.md"));
+        typeof(SettingsService).GetField("_legacyAgentInstructionsPath", Fields)!.SetValue(settings, Path.Combine(TestRoot, "AGENTS.md"));
+        typeof(SettingsService).GetField("<ActiveMode>k__BackingField", Fields)!.SetValue(settings, AppMode.Extended);
+        typeof(SettingsService).GetProperty(nameof(SettingsService.Current))!.SetValue(settings,
+            new AppSettings { AutoScanEnabled = false, Language = "zh-CN", Theme = "light", SecurityAuditInstructions = "# Synthetic security-audit rules\nAnalyze supplied evidence only." });
+        AppText.Current.SetLanguage("zh-CN");
+        Application.Start(parameters =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread()));
+            _ = new WorkflowUiRegression(settings);
+        });
+    }
+
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
+    {
+        MainWindow? window = null;
+        try
+        {
+            Resources["AppText"] = AppText.Current;
+            var storage = await DataStorageService.CreateAsync(AppMode.Extended, TestRoot);
+            var logger = new DiagnosticLogService(settings);
+            var kernels = (KernelManagerService)RuntimeHelpers.GetUninitializedObject(typeof(KernelManagerService));
+            typeof(KernelManagerService).GetField("_kernelRoot", Fields)!.SetValue(kernels, Path.Combine(TestRoot, "kernels"));
+            var analysis = new AiAnalysisService(settings, logger, kernels);
+            using var scheduler = new AuditSchedulerService(null!, analysis, storage, settings, logger);
+            using var host = new HostBuilder().ConfigureServices(services =>
+            {
+                services.AddSingleton(settings).AddSingleton(storage).AddSingleton(logger).AddSingleton(kernels)
+                    .AddSingleton(analysis).AddSingleton(scheduler).AddSingleton<DashboardViewModel>()
+                    .AddSingleton<SettingsViewModel>();
+            }).Build();
+            var hostField = typeof(App).GetField("_host", Fields)!;
+            ((IHost)hostField.GetValue(this)!).Dispose();
+            hostField.SetValue(this, host);
+            DateTime today = DateTime.Today;
+            storage.RecordTokenUsage("older", 600, 90, today.AddMonths(-1).ToUniversalTime());
+            storage.RecordTokenUsage("today", 120, 30, today.AddMinutes(1).ToUniversalTime());
+            using var view = new MainViewModel(scheduler, settings, storage);
+            window = new MainWindow(view, settings, scheduler);
+            window.Activate();
+            await Task.Delay(300);
+            var root = (FrameworkElement)window.Content;
+            var workflow = (FrameworkElement)root.FindName("WorkflowHost");
+            Require(!view.IsWorkflowVisible && workflow.Visibility == Visibility.Collapsed, "Idle workflow is hidden.");
+            var total = (TextBlock)root.FindName("TotalTokenCount");
+            Require(total.Text == "840" && total.ActualHeight > 0 && view.TokenPeriodText.Contains("150"),
+                "Idle sidebar shows persisted total and today's actual usage.");
+            var navigation = (NavigationView)root.FindName("AppNavigation");
+            var toggle = Descendants(navigation).OfType<Button>().Single(button => button.Name == "TogglePaneButton");
+            Require(navigation.IsPaneToggleButtonVisible && toggle.ActualHeight > 0, "The native pane toggle is visible at the top.");
+            var dashboard = navigation.MenuItems.OfType<NavigationViewItem>().First();
+            Require(navigation.MenuItems.Count == 1 && (string)dashboard.Tag == HubTaskCatalog.SecurityAuditId
+                && (string)dashboard.Content == "安全审计" && window.AppWindow.Title == "工具箱",
+                "Essential uses one localized security-audit entry from the Hub catalog.");
+            double navigationTop = dashboard.TransformToVisual(root).TransformPoint(default).Y;
+            double toggleBottom = toggle.TransformToVisual(root).TransformPoint(default).Y + toggle.ActualHeight;
+            Require(navigationTop >= toggleBottom && navigationTop - toggleBottom < 12,
+                "The audit entry sits directly below the native toggle.");
+            await Snapshot(root, "idle");
+            view.ApplyProgress(new(AuditStage.Collect, AuditStepState.Active, "Preparing scan...") { StartsScan = true });
+            await Task.Delay(200);
+            await Inspect(root, "started");
+            Require(Math.Abs(dashboard.TransformToVisual(root).TransformPoint(default).Y - navigationTop) < 1,
+                "Starting a scan does not move the audit entry.");
+            view.ApplyProgress(new(AuditStage.Collect, AuditStepState.Done, "Synthetic collection complete") { TotalUnits = 4, CompletedUnits = 4 });
+            view.ApplyProgress(new(AuditStage.Analyze, AuditStepState.Active, "Synthetic response in progress")
+                { BatchNumber = 1, TotalBatches = 2, CompletedBatches = 1, RequestId = "test", HasTokenUsage = true, InputTokens = 120, OutputTokens = 30 });
+            await Task.Delay(100);
+            await Inspect(root, "analyzing");
+            var progress = (ProgressBar)root.FindName("WorkflowProgress");
+            Require(progress.Value > 0, "Visible progress follows completed work.");
+            view.ApplyProgress(new(AuditStage.Analyze, AuditStepState.Failed, "Scan failed: {0}",
+                "stream disconnected before completion: stream closed before response.completed"));
+            await Task.Delay(100);
+            await Inspect(root, "failed");
+            Require(Descendants(root).OfType<TextBlock>().Any(text => text.Text.Contains("response.completed") && text.ActualHeight > 0), "Stream failure text is rendered.");
+            ((IInvokeProvider)new ButtonAutomationPeer(toggle).GetPattern(PatternInterface.Invoke)).Invoke();
+            await Task.Delay(300);
+            Require(!view.IsPaneOpen && workflow.ActualWidth > 0 && workflow.ActualHeight > 0, "Native toggle collapses the pane and retains status icons.");
+            Require(((ListView)root.FindName("WorkflowSteps")).Visibility == Visibility.Collapsed, "Collapsed pane shows icons without stage labels.");
+            Require(Math.Abs(dashboard.TransformToVisual(root).TransformPoint(default).Y - navigationTop) < 1,
+                "Collapsing the sidebar preserves the audit entry's vertical position.");
+            var tokenButton = (Button)root.FindName("CompactTokenButton");
+            var tokenIcon = (FrameworkElement)root.FindName("TokenUsageIcon");
+            Require(tokenButton.ActualWidth == 40 && tokenButton.ActualHeight == 36
+                && tokenIcon.ActualWidth == 20 && tokenIcon.ActualHeight == 20,
+                "Compact tokens use a centered outline icon and a full navigation-sized target.");
+            await Snapshot(root, "collapsed");
+            tokenButton.Flyout.ShowAt(tokenButton);
+            await Task.Delay(200);
+            var tokenFlyout = (StackPanel)((Flyout)tokenButton.Flyout).Content;
+            Require(!view.IsPaneOpen && tokenFlyout.Children.OfType<TextBlock>().Any(text => text.Text == "840")
+                && tokenFlyout.Children.OfType<TextBlock>().Any(text => text.Text.Contains("150")),
+                "The token flyout shows totals and the calendar period without expanding the sidebar.");
+            await Snapshot(root, "tokens-compact");
+            tokenButton.Flyout.Hide();
+            ((IInvokeProvider)new ButtonAutomationPeer(toggle).GetPattern(PatternInterface.Invoke)).Invoke();
+            await Task.Delay(350);
+            await Inspect(root, "reopened");
+            Require(Math.Abs(dashboard.TransformToVisual(root).TransformPoint(default).Y - navigationTop) < 1,
+                "Reopening the sidebar preserves the audit entry's vertical position.");
+            window.AppWindow.Resize(new SizeInt32(1040, 640));
+            await Task.Delay(250);
+            await Inspect(root, "small");
+            Require(Math.Abs(dashboard.TransformToVisual(root).TransformPoint(default).Y - navigationTop) < 1,
+                "Resizing the window preserves the audit entry's vertical position.");
+            var details = (FrameworkElement)root.FindName("StepDetailsScroll");
+            var scroll = (ScrollViewer)root.FindName("WorkflowScroll");
+            Require(details.TransformToVisual(scroll).TransformPoint(default).Y + details.ActualHeight <= scroll.ActualHeight,
+                "Small-window failure details remain inside the visible workflow viewport.");
+            var settingsItem = (FrameworkElement)navigation.SettingsItem;
+            Require(settingsItem.ActualHeight > 0 && settingsItem.TransformToVisual(root).TransformPoint(default).Y
+                + settingsItem.ActualHeight <= root.ActualHeight, "Settings remains reachable at the bottom in a small window.");
+            view.ApplyProgress(new(AuditStage.Collect, AuditStepState.Active, "Preparing scan...") { StartsScan = true });
+            view.ApplyProgress(new(AuditStage.Collect, AuditStepState.Done, "{0:N0} events collected", 0));
+            foreach (var stage in new[] { AuditStage.Route, AuditStage.Analyze, AuditStage.Translate })
+                view.ApplyProgress(new(stage, AuditStepState.Skipped, "No events in this scan window; {0} was not called.", "pi"));
+            view.ApplyProgress(new(AuditStage.Save, AuditStepState.Done, "Saved at {0:t}", DateTime.Now));
+            view.ApplyProgress(new(AuditStage.Complete, AuditStepState.Done,
+                "No events in this scan window. Use Reanalyze selected range to analyze earlier events."));
+            await Task.Delay(100);
+            Require(view.WorkflowTitle == "未进行 AI 分析" && view.HasSavedResult && view.IsWorkflowComplete
+                && view.TokenCountText == "Token：0 · 未调用 AI" && view.CompactTokenCountText == "0",
+                "A saved empty scan explicitly says no AI analysis was performed.");
+            await Snapshot(root, "no-events");
+            view.ApplyProgress(new(AuditStage.Collect, AuditStepState.Active, "Preparing scan...") { StartsScan = true });
+            foreach (var stage in Enum.GetValues<AuditStage>())
+                view.ApplyProgress(new(stage, AuditStepState.Done, "Completed"));
+            window.AppWindow.Resize(new SizeInt32(1280, 820));
+            var frame = (Frame)root.FindName("ContentFrame");
+            var audit = (DashboardPage)frame.Content;
+            var scanOptions = Descendants(audit).OfType<Button>().Single(button => button.Flyout is MenuFlyout);
+            var scanMenu = (MenuFlyout)scanOptions.Flyout;
+            var reanalyze = scanMenu.Items.OfType<MenuFlyoutItem>().Single();
+            audit.ViewModel.FullScanRangeIndex = 2;
+            Require(reanalyze.Text == "重新分析所选范围" && reanalyze.Command == audit.ViewModel.ReanalyzeRangeCommand
+                && audit.ViewModel.ReanalyzeRangeHint.Contains("7"),
+                "Scan options expose explicit reanalysis with the selected range.");
+            audit.ViewModel.FullScanRangeIndex = 0;
+            Require(audit.FindName("HealthChart") == null && !audit.ViewModel.HasAuditPriority
+                && audit.ViewModel.AuditHighCountText == "–" && audit.ViewModel.HealthAverageText == "--",
+                "Empty history has an explanatory summary, without a chart or invented counts.");
+            for (int offset = 29; offset >= 0; offset--)
+            {
+                if (offset is 4 or 9 or 19) continue;
+                int medium = (int)Math.Round(2 + 2 * Math.Sin(offset / 2.7));
+                var result = SyntheticAudit(today.AddDays(-offset).AddMinutes(1), true, medium);
+                if (offset == 0)
+                {
+                    var high = SyntheticAudit(today.AddMinutes(1), true, 1).Findings[0];
+                    high.Key = "synthetic_privileged_service";
+                    high.Severity = "High";
+                    high.Title = "Synthetic: unexpected service installation";
+                    high.TitleZh = "合成测试：异常服务安装";
+                    high.Recommendation = "Verify the service's installation source and associated account, then review authorization.";
+                    high.RecommendationZh = "核对该服务的安装来源和关联账号，并确认是否经过授权。";
+                    var low = SyntheticAudit(today.AddMinutes(1), true, 1).Findings[0];
+                    low.Key = "synthetic_isolated_warning";
+                    low.Severity = "Low";
+                    low.Title = "Synthetic: isolated service warning";
+                    low.TitleZh = "合成测试：单次服务告警";
+                    result.Findings.AddRange(new[] { low, high });
+                    result.HealthScore = HealthScoreCalculator.Calculate(result.Findings).Score;
+                }
+                await storage.SaveAuditResultAsync(result);
+            }
+            await storage.SaveAuditResultAsync(SyntheticAudit(today.AddDays(-400).AddMinutes(1), true, 2));
+            await storage.SaveAuditResultAsync(SyntheticAudit(today.AddDays(-2).AddSeconds(90), true, 1));
+            foreach (int offset in new[] { 6, 3, 2 })
+                await storage.SaveAuditResultAsync(SyntheticAudit(today.AddDays(-offset).AddMinutes(2), false, 0));
+            await storage.SaveAuditResultAsync(SyntheticAudit(today.AddDays(-4).AddMinutes(1), true, 1, partial: true));
+            var unassessed = SyntheticAudit(today.AddDays(-9).AddMinutes(1), true, 0);
+            unassessed.Metadata!["AnalyzedEventCount"] = JsonSerializer.SerializeToElement(0);
+            await storage.SaveAuditResultAsync(unassessed);
+            await audit.ViewModel.LoadDataCommand.ExecuteAsync(null);
+            var activity = await storage.GetAuditActivityAsync(today);
+            Require(activity.Single(day => day.Date == today.AddDays(-2)).AssessedScans == 1
+                && activity.Single(day => day.Date == today.AddDays(-2)).ScopedAssessedScans == 2
+                && activity.Single(day => day.Date == today.AddDays(-4)).ScopedAssessedScans == 0,
+                "Stored full and daily assessments aggregate separately; partial coverage earns no score.");
+            var currentPeriod = activity.Where(day => day.Date >= today.AddDays(-29)).ToList();
+            string expectedDailyAverage = ((double)currentPeriod.Sum(day => day.ScopedScoreSum)
+                / currentPeriod.Sum(day => day.ScopedAssessedScans)).ToString("0.0", AppText.Culture);
+            Require(audit.ViewModel.HealthAverageLabel == AppText.Get("Average · daily scope")
+                && audit.ViewModel.HealthAverageText == expectedDailyAverage,
+                "Daily averages include all valid audits and exclude full, partial and unassessed results.");
+            var priority = (Button)audit.FindName("AuditPriorityButton");
+            Require(audit.ViewModel.AuditHighCountText == "1" && audit.ViewModel.AuditMediumCountText == "2"
+                && audit.ViewModel.AuditLowCountText == "1" && audit.ViewModel.AuditPriorityFinding?.Key == "synthetic_privileged_service"
+                && ReferenceEquals(priority.Tag, audit.ViewModel.AuditPriorityFinding),
+                "The overview shows this audit's severity counts and opens its highest-priority finding.");
+            audit.ViewModel.SetSourceFilterCommand.Execute("Security");
+            audit.ViewModel.SetSeverityFilterCommand.Execute("Low");
+            Require(audit.ViewModel.TotalFindings == 0 && audit.ViewModel.AuditHighCountText == "1"
+                && audit.ViewModel.AuditPriorityFinding?.Key == "synthetic_privileged_service",
+                "History/source/severity filters do not change the selected audit's summary.");
+            audit.ViewModel.SetSourceFilterCommand.Execute("All");
+            audit.ViewModel.SetSeverityFilterCommand.Execute("All");
+            await Task.Delay(300);
+            await Snapshot(root, "audit-health");
+            root.RequestedTheme = ElementTheme.Dark;
+            await Task.Delay(500);
+            await Snapshot(root, "audit-health-dark");
+            root.RequestedTheme = ElementTheme.Light;
+            AppText.Current.SetLanguage("en");
+            await Task.Delay(300);
+            Require(window.AppWindow.Title == "Essential" && (string)dashboard.Content == "Security audit",
+                "Window and task names switch to Essential and Security audit in English.");
+            await Snapshot(root, "audit-health-en");
+            AppText.Current.SetLanguage("zh-CN");
+            var datePicker = (CalendarDatePicker)audit.FindName("AuditDatePicker");
+            datePicker.Date = new DateTimeOffset(today.AddDays(-2));
+            await Task.Delay(250);
+            await audit.ViewModel.LoadDataCommand.ExecutionTask!;
+            Require(audit.ViewModel.HealthAverageLabel == AppText.Get("Average · full scope")
+                && audit.ViewModel.HealthAverageText == "100.0" && !audit.ViewModel.HasAuditPriority,
+                "Selecting a full audit uses full averages and an assessed no-findings summary.");
+            datePicker.Date = new DateTimeOffset(today.AddDays(-4));
+            await Task.Delay(200);
+            await audit.ViewModel.LoadDataCommand.ExecutionTask!;
+            Require(!audit.ViewModel.HasAssessment && audit.ViewModel.HealthScoreText == "--"
+                && audit.ViewModel.HasAuditPriority && audit.ViewModel.AuditMediumCountText == "1",
+                "Partial coverage retains the actionable finding without presenting a healthy score.");
+            audit.ViewModel.SetActivityRangeCommand.Execute("0");
+            datePicker.Date = new DateTimeOffset(today.AddDays(-400));
+            await Task.Delay(200);
+            await audit.ViewModel.LoadDataCommand.ExecutionTask!;
+            Require(audit.ViewModel.HasAuditData && audit.ViewModel.SelectedAuditDate?.Date == today.AddDays(-400)
+                && audit.ViewModel.ActivityScansText == "34",
+                "Calendar selection reaches old history and all-time totals are not truncated.");
+            audit.ViewModel.SetActivityRangeCommand.Execute("30");
+            audit.ViewModel.SelectLatestCommand.Execute(null);
+            await Task.Delay(200);
+            await audit.ViewModel.LoadDataCommand.ExecutionTask!;
+            Require(datePicker.Date == null && audit.ViewModel.HealthAverageLabel == AppText.Get("Average · daily scope"),
+                "Latest audit clears the date picker and restores daily-scope history.");
+            await VerifyFindingsVisibility(root, audit, storage);
+            frame.Navigate(typeof(SettingsPage));
+            await Task.Delay(200);
+            var page = (SettingsPage)frame.Content;
+            var nav = (NavigationView)page.FindName("NavView");
+            nav.SelectedItem = nav.MenuItems.OfType<NavigationViewItem>().Single(item => (string)item.Tag == "appearance");
+            await Task.Delay(200);
+            var period = (ComboBox)page.FindName("TokenUsagePeriodSelector");
+            Require(period.ActualHeight > 0 && period.SelectedIndex == 0, "Appearance settings offer calendar token periods, defaulting to today.");
+            period.SelectedIndex = 2;
+            await page.ViewModel.SaveSettingsCommand.ExecuteAsync(null);
+            Require(settings.Current.TokenUsagePeriod == "month" && view.TokenPeriodText.StartsWith("本月"),
+                "Saving the period updates the existing sidebar.");
+            var reloaded = new SettingsService(null, TestRoot);
+            var reopenedStorage = await DataStorageService.CreateAsync(AppMode.Extended, TestRoot);
+            using (var reopened = new MainViewModel(scheduler, reloaded, reopenedStorage))
+                Require(reopened.TotalTokenCountText == "840" && reopened.TokenPeriodText.StartsWith("本月"),
+                    "Token totals and calendar period survive reopening services.");
+            await Snapshot(root, "token-settings");
+            nav.SelectedItem = nav.MenuItems.OfType<NavigationViewItem>().Single(item => (string)item.Tag == "hub");
+            await Task.Delay(450);
+            var auditPage = (FrameworkElement)page.FindName("HubPage");
+            Require(auditPage.Visibility == Visibility.Visible && ((FrameworkElement)page.FindName("AiPage")).Visibility == Visibility.Collapsed,
+                "Hub has its own settings page.");
+            var taskCard = (Expander)page.FindName("SecurityAuditTaskCard");
+            Require((string)taskCard.Tag == (string)dashboard.Tag
+                && page.ViewModel.SecurityAuditInstructionsPath == settings.GetTaskInstructionsPath((string)dashboard.Tag),
+                "The Hub card and navigation entry bind to the same task and scoped AGENTS.md.");
+            await Snapshot(root, "hub");
+            string policy = page.ViewModel.SecurityAuditInstructions;
+            page.ViewModel.ResetAiSettingsCommand.Execute(null);
+            Require(page.ViewModel.SecurityAuditInstructions == policy, "Resetting AI connections preserves audit policy.");
+            await page.ViewModel.SaveSettingsCommand.ExecuteAsync(null);
+            Require(File.ReadAllText(settings.SecurityAuditInstructionsPath) == policy, "Settings save writes the scoped audit policy.");
+            Descendants(auditPage).OfType<Expander>().Single().IsExpanded = true;
+            await Task.Delay(700);
+            await Inspect(root, "hub-policy");
+            Log("PASS Real WinUI layout and bindings with synthetic progress and failure.");
+        }
+        catch (Exception ex)
+        {
+            Log("FAIL " + ex);
+            Environment.ExitCode = 1;
+        }
+        finally
+        {
+            window?.ExitApplication();
+            Exit();
+        }
+    }
+
+    private static async Task VerifyFindingsVisibility(FrameworkElement root, DashboardPage audit, DataStorageService storage)
+    {
+        DateTime today = DateTime.Today;
+        var result = SyntheticAudit(today.AddHours(2), true, 0);
+        for (int index = 0; index < 9; index++)
+        {
+            bool update = index == 6, volsnap = index == 7;
+            string log = index < 6 ? "Application" : "System";
+            string provider = update ? "Microsoft-Windows-WindowsUpdateClient" : volsnap ? "Volsnap" : "SyntheticProvider";
+            string eventId = update ? "20" : volsnap ? "36" : "120";
+            string eventRef = log + ":" + (90000 + index);
+            DateTime time = (update ? today.AddHours(1).AddMinutes(38).AddSeconds(47)
+                : volsnap ? today.AddDays(-1).AddHours(2).AddMinutes(41).AddSeconds(13) : today.AddHours(1)).ToUniversalTime();
+            var issue = SyntheticAudit(today, true, 1).Findings[0];
+            issue.Key = "visibility_" + index;
+            issue.Severity = index < 6 ? "High" : "Medium";
+            issue.Category = log;
+            issue.LogName = log;
+            issue.Source = provider;
+            issue.EventId = eventId;
+            issue.EventRef = eventRef;
+            issue.EventRecordId = (90000 + index).ToString();
+            issue.EventTimestamp = time.ToString("O");
+            issue.EventTimes = new() { [eventRef] = time };
+            issue.RelatedEventRefs = new() { eventRef };
+            issue.FirstSeenUtc = issue.LastSeenUtc = time;
+            issue.SupportingEventCount = 1;
+            issue.Title = update ? "Synthetic: Windows update failed" : volsnap ? "Synthetic: shadow copy failed" : "Synthetic priority finding " + index;
+            issue.TitleZh = update ? "合成测试：Windows 更新失败" : volsnap ? "合成测试：卷影复制失败" : "合成测试：优先问题 " + index;
+            result.Findings.Add(issue);
+        }
+        result.Metadata!["ScanStart"] = JsonSerializer.SerializeToElement(today.AddDays(-1).ToUniversalTime());
+        result.Metadata["EventCount"] = result.Metadata["AnalyzedEventCount"] = JsonSerializer.SerializeToElement(9);
+        result.Metadata["FilteredEventCount"] = JsonSerializer.SerializeToElement(0);
+        result.Metadata["Channels"] = JsonSerializer.SerializeToElement(new[] { "Security", "System", "Application", "Setup", "ForwardedEvents" }
+            .Select(log => new AuditChannelCoverage(log, log == "Security" ? "skipped" : "complete",
+                log == "Application" ? 6 : log == "System" ? 3 : 0, log == "Security" ? "not_requested" : "none")));
+        result.HealthScore = HealthScoreCalculator.Calculate(result.Findings).Score;
+        await storage.SaveAuditResultAsync(result);
+        await audit.ViewModel.LoadDataCommand.ExecuteAsync(null);
+        var view = audit.ViewModel;
+        view.SetFindingsViewCommand.Execute("Priority");
+        await Task.Delay(150);
+        var allList = (ItemsControl)audit.FindName("AllFindingsList");
+        var priorityPanel = (FrameworkElement)audit.FindName("PriorityFindingsPanel");
+        var allButton = (ToggleButton)audit.FindName("AllFindingsButton");
+        var search = (TextBox)audit.FindName("FindingSearchBox");
+        var scroll = (ScrollViewer)audit.FindName("AuditScroll");
+        int total = view.FindingSections.Sum(section => section.Count);
+        Require(total > 5 && view.PriorityFindings.Count == 5
+            && view.PriorityFindings.All(issue => issue.Key is not ("visibility_6" or "visibility_7"))
+            && view.PriorityPreviewLabel == AppText.Format("Showing {0} of {1} findings", 5, total)
+            && priorityPanel.Visibility == Visibility.Visible && allList.Visibility == Visibility.Collapsed,
+            "The priority preview explicitly counts five of all findings; both System errors remain outside it.");
+        scroll.ChangeView(null, search.TransformToVisual(scroll).TransformPoint(default).Y + scroll.VerticalOffset - 12, null, true);
+        await Task.Delay(100);
+        await Snapshot(root, "findings-priority");
+        ((IToggleProvider)new ToggleButtonAutomationPeer(allButton).GetPattern(PatternInterface.Toggle)).Toggle();
+        await Task.Delay(200);
+        Require(view.ShowAllFindings && allButton.IsChecked == true && allList.Visibility == Visibility.Visible
+            && priorityPanel.Visibility == Visibility.Collapsed && view.FindingSections.All(section => section.IsExpanded),
+            "The All findings button reveals every category without duplicating the priority preview.");
+        foreach (string key in new[] { "visibility_6", "visibility_7" })
+            Require(Descendants(allList).OfType<Button>().Any(button => button.Tag is AuditIssueEnhanced issue
+                && issue.Key == key && button.ActualHeight > 0), "The complete list renders " + key + " beyond the first five.");
+        view.FindingSections[0].IsExpanded = false;
+        view.SetSourceFilterCommand.Execute("System");
+        Require(view.FindingSections.All(section => section.IsExpanded)
+            && view.FindingSections.SelectMany(section => section.Issues).All(issue => issue.LogName == "System"),
+            "Selecting System opens matching categories even when previously collapsed.");
+        view.FindingSections[0].IsExpanded = false;
+        view.SetSourceFilterCommand.Execute("System");
+        Require(view.FindingSections.All(section => section.IsExpanded), "Selecting the current source reopens its results.");
+        view.FindingSections[0].IsExpanded = false;
+        view.SetSeverityFilterCommand.Execute("Medium");
+        Require(view.FindingSections.All(section => section.IsExpanded), "Severity filtering also opens matching categories.");
+        string health = view.HealthScoreText;
+        search.Text = "WindowsUpdateClient 20";
+        await Task.Delay(150);
+        Require(view.FindingSearchText == search.Text && view.FindingSections.SelectMany(section => section.Issues).Single().Key == "visibility_6"
+            && view.ShowAllFindings && view.HealthScoreText == health,
+            "Provider plus event-ID search finds the stored update failure without changing the audit score.");
+        scroll.ChangeView(null, search.TransformToVisual(scroll).TransformPoint(default).Y + scroll.VerticalOffset - 12, null, true);
+        await Task.Delay(100);
+        await Snapshot(root, "findings-update");
+        search.Text = "36";
+        await Task.Delay(100);
+        Require(view.FindingSections.SelectMany(section => section.Issues).Single().Key == "visibility_7",
+            "Event 36 finds Volsnap even though it is not in the priority preview.");
+        await Snapshot(root, "findings-volsnap");
+        search.Text = "20";
+        await Task.Delay(100);
+        Require(view.FindingSections.SelectMany(section => section.Issues).Single().Key == "visibility_6",
+            "A numeric search matches the exact event ID, not event 120 or a record number.");
+        AppText.Current.SetLanguage("en");
+        root.RequestedTheme = ElementTheme.Dark;
+        await Task.Delay(200);
+        Require(view.AllFindingsLabel == "All findings (1)" && allButton.IsChecked == true,
+            "Language changes preserve the active search and complete-list view.");
+        await Snapshot(root, "findings-update-en-dark");
+        AppText.Current.SetLanguage("zh-CN");
+        root.RequestedTheme = ElementTheme.Light;
+        search.Text = "missing-provider-synthetic";
+        await Task.Delay(100);
+        Require(view.ShowNoFilterMatches && view.FindingSections.Count == 0 && view.AllFindingsLabel == AppText.Format("All findings ({0})", 0),
+            "An unmatched search reports no matches with an accurate zero count.");
+        search.Text = "";
+        await Task.Delay(100);
+        Require(!view.ShowNoFilterMatches && view.FindingSections.SelectMany(section => section.Issues).Count() > 1,
+            "Clearing the search restores filtered history.");
+        view.SetSourceFilterCommand.Execute("All");
+        view.SetSeverityFilterCommand.Execute("All");
+        view.SetFindingsViewCommand.Execute("Priority");
+    }
+
+    private static AuditResult SyntheticAudit(DateTime localTime, bool daily, int medium, bool partial = false)
+    {
+        var result = new AuditResult
+        {
+            Timestamp = localTime.ToUniversalTime(),
+            Metadata = new Dictionary<string, JsonElement>
+            {
+                ["CoverageStatus"] = JsonSerializer.SerializeToElement(partial ? "partial" : daily ? "limited" : "complete"),
+                ["AnalyzedEventCount"] = JsonSerializer.SerializeToElement(12),
+                ["EventCount"] = JsonSerializer.SerializeToElement(12),
+                ["AnalysisCompleted"] = JsonSerializer.SerializeToElement(true),
+                ["AnalysisModel"] = JsonSerializer.SerializeToElement("gpt-5.6-luna"),
+                ["ScanType"] = JsonSerializer.SerializeToElement("Full Scan"),
+                ["ScanStart"] = JsonSerializer.SerializeToElement(localTime.AddHours(-1).ToUniversalTime()),
+                ["ScanEnd"] = JsonSerializer.SerializeToElement(localTime.ToUniversalTime()),
+                ["Channels"] = JsonSerializer.SerializeToElement(new[] { "Security", "System", "Application", "Setup", "ForwardedEvents" }
+                    .Select(log => new AuditChannelCoverage(log, daily && log == "Security" ? "skipped" : "complete",
+                        log == "System" ? 12 : 0, daily && log == "Security" ? "not_requested" : "none")))
+            }
+        };
+        for (int i = 0; i < medium; i++)
+            result.Findings.Add(new AuditIssue
+            {
+                Key = "synthetic_service_" + i, Severity = "Medium", Category = "System", LogName = "System",
+                Title = "Synthetic service warning", TitleZh = "合成测试：服务告警",
+                Description = "Synthetic evidence for UI regression.", DescriptionZh = "用于界面回归的合成证据。",
+                RootCause = "The cause is not established.", RootCauseZh = "原因尚未确定。",
+                Recommendation = "Review the service's next startup event.", RecommendationZh = "核对该服务下一次启动事件。",
+                AnalysisModel = "gpt-5.6-luna"
+            });
+        result.HealthScore = HealthScoreCalculator.Calculate(result.Findings).Score;
+        return result;
+    }
+
+    private static async Task Inspect(FrameworkElement root, string name)
+    {
+        root.UpdateLayout();
+        var workflow = (FrameworkElement)root.FindName("WorkflowHost");
+        var heading = (FrameworkElement)root.FindName("WorkflowHeading");
+        var scroll = Descendants(workflow).OfType<ScrollViewer>().First();
+        Log($"{name}: host={workflow.ActualWidth}x{workflow.ActualHeight}, viewport={scroll.ViewportWidth}x{scroll.ViewportHeight}, heading={heading.ActualWidth}x{heading.ActualHeight}, dc={workflow.DataContext?.GetType().Name}");
+        Require(workflow.Visibility == Visibility.Visible && scroll.ViewportHeight > 40 && heading.ActualHeight > 0,
+            name + ": workflow has a visible viewport.");
+        Require(Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(heading).Opacity > 0,
+            name + ": heading is not transparent.");
+        await Snapshot(root, name);
+    }
+
+    private static async Task Snapshot(FrameworkElement root, string name)
+    {
+        var bitmap = new RenderTargetBitmap();
+        await bitmap.RenderAsync(root);
+        using (var file = File.Create(Path.Combine(TestRoot, name + ".png")))
+        {
+            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, file.AsRandomAccessStream());
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+                (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, 96, 96, (await bitmap.GetPixelsAsync()).ToArray());
+            await encoder.FlushAsync();
+        }
+    }
+
+    private static System.Collections.Generic.IEnumerable<DependencyObject> Descendants(DependencyObject parent)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            yield return child;
+            foreach (var descendant in Descendants(child)) yield return descendant;
+        }
+    }
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition) throw new InvalidOperationException(message);
+        Log("PASS " + message);
+    }
+    private static void Log(string message) => File.AppendAllText(Path.Combine(TestRoot, "result.txt"), message + Environment.NewLine);
+}

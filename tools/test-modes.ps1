@@ -1,6 +1,6 @@
 # Synthetic-only mode/permission guards, mocked collection, Python -> .NET roundtrip and WAL refresh.
 # Does not activate WinUI, elevate, read real settings/logs, or contact any AI endpoint.
-param([string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll")
+param([string]$AssemblyPath = "$PSScriptRoot\..\artifacts\bin\x64\Debug\net8.0-windows10.0.19041.0\Essential.dll")
 $ErrorActionPreference = 'Stop'
 $assembly = [Reflection.Assembly]::LoadFrom((Resolve-Path -LiteralPath $AssemblyPath).Path)
 $directory = Split-Path -Parent $assembly.Location
@@ -47,7 +47,7 @@ function Assert-Blocked([scriptblock]$Action) {
     catch { $blocked = $_.Exception.GetBaseException() -is [InvalidOperationException] }
     Assert-True $blocked 'An assistant-only guard did not reject the action.'
 }
-function New-TestSettings([string]$Mode = 'assistant') {
+function New-TestSettings([string]$Mode = 'extended') {
     $service = [Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($settingsType)
     $settings = [LocalSecurityAudit.Models.AppSettings]::new()
     $settings.Mode = $Mode
@@ -84,15 +84,14 @@ function Get-WinEvent {
 }
 
 try {
-    Test-Case 'Only full-access mode requires elevation; extended and full share the legacy database' {
-        foreach ($mode in 'assistant', 'extended', 'full') {
-            Assert-True ([LocalSecurityAudit.Models.AppMode]::Normalize($mode) -eq $mode) 'Known mode was lost.'
-            Assert-True ([LocalSecurityAudit.Models.AppMode]::RequiresElevation($mode) -eq ($mode -eq 'full')) 'Wrong elevation gate.'
+    Test-Case 'Only full-access requires elevation; both supported modes use the primary database' {
+        foreach ($mode in 'extended', 'full') {
             $settings = New-TestSettings $mode
-            Assert-True ($settings.IsAssistantMode -eq ($mode -eq 'assistant') -and $settings.IsFullMode -eq ($mode -eq 'full')) 'Wrong active permissions.'
-            if ($mode -ne 'assistant') { $settings.EnsureExtendedMode() }
+            Assert-True ([LocalSecurityAudit.Models.AppMode]::RequiresElevation($mode) -eq ($mode -eq 'full')) 'Wrong elevation requirement.'
+            Assert-True ($settings.IsFullMode -eq ($mode -eq 'full')) 'Wrong active permissions.'
+            Assert-True ([LocalSecurityAudit.Services.DataStorageService]::GetDatabasePath($mode, $testRoot) -eq (Join-Path $testRoot 'audit_data.db')) 'Modes did not share the primary database.'
         }
-        Assert-True ([LocalSecurityAudit.Services.DataStorageService]::GetDatabasePath('full', $testRoot) -eq [LocalSecurityAudit.Services.DataStorageService]::GetDatabasePath('extended', $testRoot)) 'Full mode lost existing history.'
+        Assert-True ([LocalSecurityAudit.Models.AppMode]::Normalize('assistant') -eq 'extended') 'Retired mode did not migrate to extended.'
     }
 
     Test-Case 'Native collection plans skip Security normally and include all five channels only in full mode' {
@@ -123,10 +122,10 @@ try {
 
     Test-Case 'Missing and invalid saved modes default safely without losing AI configuration' {
         $settings = [Text.Json.JsonSerializer]::Deserialize('{"Theme":"dark","AiTargets":[{"BaseUrl":"https://unused.invalid","ApiKey":"synthetic-key"}]}', [LocalSecurityAudit.Models.AppSettings])
-        Assert-True ($settings.Mode -eq 'assistant') 'Old settings did not default to assistant.'
+        Assert-True ($settings.Mode -eq 'extended') 'Old settings did not default to extended.'
         $settings.Mode = 'unknown-mode'
         $settingsType.GetMethod('Normalize', $flags).Invoke($null, @($settings))
-        Assert-True ($settings.Mode -eq 'assistant' -and $settings.Theme -eq 'dark' -and $settings.AiTargets[0].ApiKey -eq 'synthetic-key') 'Normalization lost configuration.'
+        Assert-True ($settings.Mode -eq 'extended' -and $settings.Theme -eq 'dark' -and $settings.AiTargets[0].ApiKey -eq 'synthetic-key') 'Normalization lost configuration.'
     }
 
     Test-Case 'Configuration, diagnostics and results stay outside the executable working directory' {
@@ -138,7 +137,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $fixtureRoot 'API.txt'), "https://wrong-parent-directory.invalid`nsynthetic-parent-key")
         $settings = New-TestSettings
         $settingsType.GetField('_settingsPath', $flags).SetValue($settings, (Join-Path $dataDirectory 'settings.json'))
-        $settingsType.GetField('_agentInstructionsPath', $flags).SetValue($settings, (Join-Path $dataDirectory 'AGENTS.md'))
+        $settingsType.GetField('_securityAuditInstructionsPath', $flags).SetValue($settings, (Join-Path $dataDirectory 'chains/security-audit/AGENTS.md'))
         $previousDirectory = [Environment]::CurrentDirectory
         try {
             [Environment]::CurrentDirectory = $programDirectory
@@ -154,13 +153,13 @@ try {
             Assert-True ($logger.LogPath -eq (Join-Path $dataDirectory 'diagnostic.log') -and (Test-Path -LiteralPath $logger.LogPath)) 'Diagnostics were written outside the configuration data directory.'
             foreach ($mode in 'assistant', 'extended', 'full') {
                 $storage = [LocalSecurityAudit.Services.DataStorageService]::CreateAsync($mode, $dataDirectory).GetAwaiter().GetResult()
-                $expected = if ($mode -eq 'assistant') { Join-Path $dataDirectory 'assistant\audit_data.db' } else { Join-Path $dataDirectory 'audit_data.db' }
+                $expected = Join-Path $dataDirectory 'audit_data.db'
                 Assert-True ($storage.DatabasePath -eq $expected) 'A result database used the executable working directory.'
                 $defaultRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'LocalSecurityAudit'
-                $defaultExpected = if ($mode -eq 'assistant') { Join-Path $defaultRoot 'assistant\audit_data.db' } else { Join-Path $defaultRoot 'audit_data.db' }
+                $defaultExpected = Join-Path $defaultRoot 'audit_data.db'
                 Assert-True ([LocalSecurityAudit.Services.DataStorageService]::GetDatabasePath($mode) -eq $defaultExpected) 'The default result path depends on the working directory.'
             }
-            Assert-True ((Test-Path -LiteralPath (Join-Path $dataDirectory 'settings.json')) -and (Test-Path -LiteralPath (Join-Path $dataDirectory 'AGENTS.md'))) 'Configuration did not stay in user data.'
+            Assert-True ((Test-Path -LiteralPath (Join-Path $dataDirectory 'settings.json')) -and (Test-Path -LiteralPath (Join-Path $dataDirectory 'chains/security-audit/AGENTS.md'))) 'Configuration did not stay in user data.'
             $programFiles = @(Get-ChildItem -LiteralPath $programDirectory -File -Recurse)
             Assert-True ($programFiles.Count -eq 1 -and $programFiles[0].Name -eq 'API.txt') 'Configuration, diagnostics or results leaked into the executable working directory.'
         }
@@ -171,65 +170,24 @@ try {
         $settings = New-TestSettings
         $settingsPath = Join-Path $testRoot 'settings.json'
         $settingsType.GetField('_settingsPath', $flags).SetValue($settings, $settingsPath)
-        $settingsType.GetField('_agentInstructionsPath', $flags).SetValue($settings, (Join-Path $testRoot 'policy.md'))
-        $settings.Current.Mode = 'extended'
+        $settingsType.GetField('_securityAuditInstructionsPath', $flags).SetValue($settings, (Join-Path $testRoot 'policy.md'))
+        $settings.Current.Mode = 'full'
         $settings.Save($settings.Current)
-        Assert-True ($settings.IsAssistantMode -and $settings.ActiveMode -eq 'assistant') 'The running process changed mode.'
-        Assert-True ((Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).Mode -eq 'extended') 'Next-start mode was not persisted.'
-        Assert-Blocked { $settings.EnsureExtendedMode() }
+        Assert-True ($settings.ActiveMode -eq 'extended' -and -not $settings.IsFullMode) 'The running process changed mode.'
+        Assert-True ((Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).Mode -eq 'full') 'Next-start mode was not persisted.'
     }
 
-    Test-Case 'The two databases have the same table schema and preserve legacy data' {
+    Test-Case 'Retired mode values cannot create or write a new legacy database' {
         $script:extended = [LocalSecurityAudit.Services.DataStorageService]::CreateAsync('extended', $testRoot).GetAwaiter().GetResult()
         $row = [LocalSecurityAudit.Models.AuditResult]::new()
         $row.Timestamp = [datetime]::UtcNow; $row.HealthScore = 85
         $extended.SaveAuditResultAsync($row).GetAwaiter().GetResult()
+        $script:legacyReader = [LocalSecurityAudit.Services.DataStorageService]::CreateAsync('assistant', $testRoot).GetAwaiter().GetResult()
+        Assert-True ($legacyReader.DatabasePath -eq $extended.DatabasePath) 'Retired mode opened a writable legacy database.'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $testRoot 'assistant/audit_data.db'))) 'Startup created a retired database.'
+        Assert-True ($legacyReader.GetLatestResultAsync().GetAwaiter().GetResult().Timestamp -eq $row.Timestamp) 'Existing primary history was lost.'
         [Microsoft.Data.Sqlite.SqliteConnection]::ClearAllPools()
         $script:legacyHash = (Get-FileHash -LiteralPath $extended.DatabasePath).Hash
-        $script:assistant = [LocalSecurityAudit.Services.DataStorageService]::CreateAsync('assistant', $testRoot).GetAwaiter().GetResult()
-        Assert-True ($assistant.IsReadOnly -and -not $extended.IsReadOnly) 'Storage access modes are wrong.'
-        Assert-True ($assistant.DatabasePath -ne $extended.DatabasePath -and $extended.DatabasePath -eq (Join-Path $testRoot 'audit_data.db')) 'Legacy database was moved or modes share a path.'
-        Assert-True ($assistant.GetLatestResultAsync().GetAwaiter().GetResult().Timestamp -eq $row.Timestamp) 'Assistant mode did not share extended history.'
-        $schemas = foreach ($storage in $extended, $assistant) {
-            $connection = [Microsoft.Data.Sqlite.SqliteConnection]::new($storageType.GetField('_connectionString', $flags).GetValue($storage))
-            try { $connection.Open(); $command = $connection.CreateCommand(); $command.CommandText = "SELECT sql FROM sqlite_master WHERE name='AuditResults'"; $command.ExecuteScalar() }
-            finally { $connection.Dispose() }
-        }
-        Assert-True ($schemas[0] -eq $schemas[1]) 'Mode schemas diverged.'
-    }
-
-    Test-Case 'Assistant storage blocks save, cleanup, vacuum, translation and optimization writes' {
-        Assert-Blocked { $assistant.SaveAuditResultAsync([LocalSecurityAudit.Models.AuditResult]::new()).GetAwaiter().GetResult() }
-        Assert-Blocked { $assistant.CleanupOldDataAsync().GetAwaiter().GetResult() }
-        Assert-Blocked { $assistant.VacuumDatabaseAsync().GetAwaiter().GetResult() }
-        $issues = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
-        Assert-Blocked { $assistant.UpdateTranslatedFindingsAsync(1, '[]', $issues).GetAwaiter().GetResult() }
-        $updates = [Collections.Generic.Dictionary[int,LocalSecurityAudit.Models.AuditIssue]]::new()
-        Assert-Blocked { $assistant.UpdateOptimizedFindingsAsync(1, '[]', $updates, 'gpt-6-astra').GetAwaiter().GetResult() }
-        Assert-True ($storageType.GetField('_connectionString', $flags).GetValue($assistant).Contains('Mode=ReadOnly')) 'The database connection is not read-only.'
-    }
-
-    Test-Case 'Assistant services reject scans and every AI entry point before external access' {
-        $settings = New-TestSettings
-        # Null loggers and an empty URL also prevent accidental external I/O if a guard regresses.
-        $ai = [LocalSecurityAudit.Services.AiAnalysisService]::new($settings, $null)
-        $events = [LocalSecurityAudit.Services.EventLogService]::new($null, $settings)
-        $scheduler = [LocalSecurityAudit.Services.AuditSchedulerService]::new($null, $ai, $assistant, $settings, $null)
-        try {
-            Assert-Blocked { $events.ReadAllEventsAsync([datetime]::UtcNow, [datetime]::UtcNow).GetAwaiter().GetResult() }
-            Assert-Blocked { $scheduler.ExecuteAuditAsync().GetAwaiter().GetResult() }
-            Assert-Blocked { $scheduler.OptimizeHistoryAsync('gpt-6-astra').GetAwaiter().GetResult() }
-            Assert-Blocked { $ai.AnalyzeEventsAsync([Collections.Generic.List[LocalSecurityAudit.Models.SecurityEvent]]::new()).GetAwaiter().GetResult() }
-            $target = [LocalSecurityAudit.Models.AiTarget]::new(); $target.BaseUrl = ''
-            Assert-Blocked { $ai.TestConnectionAsync($target).GetAwaiter().GetResult() }
-            $issues = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
-            Assert-Blocked { $ai.TranslateLegacyFindingsAsync($issues).GetAwaiter().GetResult() }
-            Assert-Blocked { $ai.OptimizeFindingsAsync($issues, 'gpt-6-astra').GetAwaiter().GetResult() }
-            $scheduler.StartAsync([Threading.CancellationToken]::None).GetAwaiter().GetResult()
-            $type = $scheduler.GetType()
-            Assert-True ($null -eq $type.GetField('_initialTask', $flags).GetValue($scheduler) -and $null -eq $type.GetField('_loopCts', $flags).GetValue($scheduler)) 'Assistant startup scheduled an audit.'
-        }
-        finally { $scheduler.StopAsync([Threading.CancellationToken]::None).GetAwaiter().GetResult(); $scheduler.Dispose() }
     }
 
     Test-Case 'Mocked collector emits complete bounded evidence, redacts secrets and excludes command lines' {
@@ -269,17 +227,17 @@ try {
         [IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         $published = & python $publisher publish $resultPath --evidence $evidencePath --data-root $testRoot | ConvertFrom-Json
         Assert-True ($LASTEXITCODE -eq 0 -and $published.Added) 'Synthetic publish failed.'
-        $saved = $assistant.GetLatestResultAsync().GetAwaiter().GetResult()
+        $saved = $legacyReader.GetLatestResultAsync().GetAwaiter().GetResult()
         Assert-True ($saved.HealthScore -eq 94 -and $saved.HasAssessment -and $saved.Findings[0].HasBilingualText) 'Stored JSON did not deserialize into an assessed bilingual result.'
         Assert-True ($saved.Findings[0].EventRecordId -eq '2' -and $saved.Findings[0].AnalysisModel -eq 'synthetic-model') 'Evidence/model provenance was lost.'
-        $today = $assistant.GetTodayResultAsync().GetAwaiter().GetResult()
+        $today = $legacyReader.GetTodayResultAsync().GetAwaiter().GetResult()
         Assert-True ($null -ne $today -and $today.Timestamp.Kind -eq 'Utc') 'Python timestamps were excluded from .NET date queries.'
         [Microsoft.Data.Sqlite.SqliteConnection]::ClearAllPools()
         Assert-True ((Get-FileHash -LiteralPath $extended.DatabasePath).Hash -eq $legacyHash) 'Publishing changed the extended database.'
     }
 
     Test-Case 'Incomplete coverage keeps findings but removes scores from dashboard and trends' {
-        $row = $assistant.GetLatestResultAsync().GetAwaiter().GetResult()
+        $row = $legacyReader.GetLatestResultAsync().GetAwaiter().GetResult()
         $row.Metadata['CoverageStatus'] = [Text.Json.JsonDocument]::Parse('"partial"').RootElement.Clone()
         Assert-True ($row.HasIncompleteCoverage -and -not $row.HasAssessment -and $row.Findings.Count -eq 1) 'Partial audit became a health assessment.'
         $type = $assembly.GetType('LocalSecurityAudit.ViewModels.DashboardViewModel', $true)
@@ -299,7 +257,7 @@ try {
     }
 
     Test-Case 'Limited scope keeps findings but never becomes an overall health assessment' {
-        $row = $assistant.GetLatestResultAsync().GetAwaiter().GetResult()
+        $row = $legacyReader.GetLatestResultAsync().GetAwaiter().GetResult()
         $row.Metadata['CoverageStatus'] = [Text.Json.JsonDocument]::Parse('"limited"').RootElement.Clone()
         Assert-True ($row.HasLimitedCoverage -and $row.HasIncompleteCoverage -and -not $row.HasAssessment) 'Limited scope earned a full score.'
         $type = $assembly.GetType('LocalSecurityAudit.ViewModels.DashboardViewModel', $true)
@@ -412,7 +370,7 @@ try {
             $rejected = $false
             try { $null = $fresh.GetAuditRecordCountAsync().GetAwaiter().GetResult() }
             catch { $rejected = $_.Exception.GetBaseException() -is [IO.InvalidDataException] }
-            Assert-True ($rejected -and $fresh.RejectedAssistantRecords -eq 1) 'Malformed external metadata entered the shared view.'
+            Assert-True ($rejected -and $fresh.RejectedLegacyRecords -eq 1) 'Malformed external metadata entered the shared view.'
         }
         finally {
             $cancel.Cancel()
@@ -421,14 +379,12 @@ try {
         }
     }
 
-    Test-Case 'The build has an asInvoker manifest and includes the external workflow' {
-        $exe = Join-Path $directory 'LocalSecurityAudit.exe'
+    Test-Case 'The build has an asInvoker manifest and excludes retired external workflow files' {
+        $exe = Join-Path $directory 'Essential.exe'
         Assert-True ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($exe)).Contains('level="asInvoker"')) 'The executable still requires administrator privileges.'
-            Assert-True ([Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductVersion -eq '0.3.8') 'Product version was not applied.'
+            Assert-True ([Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductVersion -eq '0.4.3') 'Product version was not applied.'
         foreach ($relative in 'AGENTS.md','tools/collect-assistant-events.ps1','tools/publish-assistant-audit.py') {
-            Assert-True (Test-Path -LiteralPath (Join-Path $directory $relative)) "Missing packaged workflow file: $relative"
-            $source = Join-Path (Split-Path $PSScriptRoot -Parent) $relative
-            Assert-True ((Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath (Join-Path $directory $relative)).Hash) "Outdated packaged workflow file: $relative"
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $directory $relative))) "Retired workflow was packaged: $relative"
         }
     }
 }

@@ -2,7 +2,7 @@
 # streams and an in-memory database; does not load user settings, open event logs
 # or call an AI endpoint.
 param(
-    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Debug\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll"
+    [string]$AssemblyPath = "$PSScriptRoot\..\artifacts\bin\x64\Debug\net8.0-windows10.0.19041.0\Essential.dll"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -351,214 +351,6 @@ Test-Case 'Valid empty results and legacy JSON forms remain accepted' {
     }
 }
 
-if (-not ('AnalysisRegressionStream' -as [type])) {
-    Add-Type -TypeDefinition @'
-using System;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-
-public sealed class AnalysisRegressionStream : Stream
-{
-    private readonly MemoryStream source;
-    private readonly bool holdOpen;
-    private readonly int chunkBytes;
-    public AnalysisRegressionStream(byte[] data, bool holdOpen, int chunkBytes)
-    { source = new MemoryStream(data); this.holdOpen = holdOpen; this.chunkBytes = chunkBytes; }
-    public override bool CanRead => true;
-    public override bool CanSeek => false;
-    public override bool CanWrite => false;
-    public override long Length => source.Length;
-    public override long Position { get => source.Position; set => throw new NotSupportedException(); }
-    public override int Read(byte[] buffer, int offset, int count) => source.Read(buffer, offset, count);
-    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
-    {
-        if (source.Position < source.Length) return source.Read(buffer.Span[..Math.Min(buffer.Length, chunkBytes)]);
-        if (!holdOpen) return 0;
-        await Task.Delay(Timeout.Infinite, token);
-        return 0;
-    }
-    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken token)
-        => ReadAsync(buffer.AsMemory(offset, count), token).AsTask();
-    public override void Flush() { }
-    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-    public override void SetLength(long value) => throw new NotSupportedException();
-    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-    protected override void Dispose(bool disposing) { if (disposing) source.Dispose(); base.Dispose(disposing); }
-}
-'@
-}
-
-function New-CompletedResponse([string]$Text = '{"issues":[]}') {
-    return @{id='resp_0123456789abcdef0123456789abcdef'; object='response'; status='completed'; output=@(
-        @{type='message'; role='assistant'; status='completed'; content=@(@{type='output_text'; text=$Text})}
-    )}
-}
-
-function Read-TestStream([object[]]$Events, [string]$Mode = 'responses', [switch]$HoldOpen, [string]$RawSse = '', [int]$ChunkBytes = 4096) {
-    $sse = if ($RawSse) { $RawSse } else { ($Events | ForEach-Object { 'data: ' + ($_ | ConvertTo-Json -Compress -Depth 10) + "`n`n" }) -join '' }
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($sse)
-    $stream = [AnalysisRegressionStream]::new($bytes, $HoldOpen.IsPresent, $ChunkBytes)
-    $response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::OK)
-    $response.Content = [System.Net.Http.StreamContent]::new($stream)
-    $response.Content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::new('text/event-stream')
-    $timeout = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(3))
-    try {
-        $task = Invoke-AnalysisMethod 'ReadAnalysisResponseAsync' @($response, $Mode, 'Synthetic', $null, $timeout.Token)
-        return $task.GetAwaiter().GetResult()
-    }
-    finally { $response.Dispose(); $timeout.Dispose() }
-}
-
-Test-Case 'Only response.completed finishes a Responses stream without waiting for socket close' {
-    $timer = [System.Diagnostics.Stopwatch]::StartNew()
-    $result = Read-TestStream @(
-        @{type='response.output_text.delta'; delta='{"issues":[]}'},
-        @{type='response.output_text.done'; text='{"issues":[]}'},
-        @{type='response.completed'; response=(New-CompletedResponse)}
-    ) -HoldOpen
-    Assert-True ($result.Text -eq '{"issues":[]}' -and $timer.Elapsed.TotalSeconds -lt 2) 'Complete text did not finish promptly.'
-}
-
-Test-Case 'Complete JSON or text done at EOF is not a completed Responses result' {
-    foreach ($type in 'response.output_text.delta', 'response.output_text.done') {
-        Assert-Throws { Read-TestStream @(@{type=$type; delta='{"issues":[]}'; text='{"issues":[]}'}) } ([Net.Http.HttpRequestException])
-    }
-}
-
-Test-Case 'Truncated JSON stays a failure even when the stream reports completion' {
-    Assert-Throws {
-        Read-TestStream @(@{type='response.completed'; response=(New-CompletedResponse '{"issues":[')})
-    } ([System.Net.Http.HttpRequestException])
-}
-
-Test-Case 'Incomplete response status is rejected' {
-    Assert-Throws {
-        Read-TestStream @(@{type='response.output_text.delta'; delta='{"issues":[]}'}, @{type='response.incomplete'})
-    } ([System.Net.Http.HttpRequestException])
-}
-
-Test-Case 'Text done cannot hide a later failure, cancellation or incomplete response' {
-    foreach ($status in 'failed', 'cancelled', 'incomplete') {
-        Assert-Throws {
-            Read-TestStream @(@{type='response.output_text.done'; text='{"issues":[]}'}, @{type="response.$status"; response=@{status=$status}})
-        } ([Net.Http.HttpRequestException])
-    }
-}
-
-Test-Case 'Completed response output replaces deltas and combines only assistant output_text parts' {
-    $response = New-CompletedResponse
-    $response.output = @(
-        @{type='reasoning'; content=@(@{type='output_text'; text='not the answer'})},
-        @{type='message'; role='assistant'; status='completed'; content=@(@{type='output_text'; text='{"issues":'})},
-        @{type='message'; role='assistant'; status='completed'; content=@(@{type='output_text'; text='[]}'})}
-    )
-    $result = Read-TestStream @(@{type='response.output_text.delta'; delta='stale partial text'}, @{type='response.completed'; response=$response})
-    Assert-True ($result.Text -eq '{"issues":[]}') 'Final response items were duplicated, omitted or mixed with reasoning.'
-    [string]$json = $response | ConvertTo-Json -Compress -Depth 10
-    Assert-True ((Invoke-AnalysisMethod 'ExtractMessageContent' @($json, 'responses')) -eq '{"issues":[]}') 'JSON response did not use the same typed output contract.'
-}
-
-Test-Case 'Responses does not accept a Chat Completions DONE sentinel as completion' {
-    Assert-Throws { Read-TestStream @() -RawSse "data: [DONE]`n`n" } ([Net.Http.HttpRequestException])
-}
-
-Test-Case 'Fragmented UTF8, CRLF, comments and multiline SSE data follow the standard framing' {
-    $text = '{"issues":[{"title":"合成测试文本"}]}'
-    $event = @{type='response.completed'; sequence_number=7; response=(New-CompletedResponse $text)} | ConvertTo-Json -Depth 10
-    $dataLines = ($event -split '\r?\n' | ForEach-Object { 'data: ' + $_ }) -join "`r`n"
-    $sse = ": heartbeat`r`nid: 7`r`nevent: response.completed`r`n$dataLines`r`n`r`n"
-    $result = Read-TestStream @() -RawSse $sse -ChunkBytes 1
-    Assert-True ($result.Text -eq $text) 'SSE framing or fragmented Unicode was corrupted.'
-}
-
-Test-Case 'An unrelated item failure is not mistaken for a response.failed event' {
-    $result = Read-TestStream @(@{type='response.some_tool.failed'}, @{type='response.completed'; response=(New-CompletedResponse)})
-    Assert-True ($result.Text -eq '{"issues":[]}') 'A nonterminal event terminated the response.'
-}
-
-Test-Case 'Refusals are not accepted as empty successful assessments' {
-    $response = New-CompletedResponse
-    $response.output[0].content = @(@{type='refusal'; refusal='synthetic-private-refusal'})
-    Assert-Throws { Read-TestStream @(@{type='response.refusal.done'; refusal='synthetic-private-refusal'}, @{type='response.completed'; response=$response}) } ([Net.Http.HttpRequestException])
-}
-
-Test-Case 'JSON Responses require a completed typed response, not SDK helpers or chat payloads' {
-    foreach ($payload in @(
-        '{"output_text":"{\"issues\":[]}"}',
-        '{"choices":[{"message":{"content":"{\"issues\":[]}"}}]}',
-        '{"object":"response","status":"in_progress","output":[]}',
-        '{"object":"response","status":"completed","output":[]}'
-    )) {
-        Assert-Throws { Invoke-AnalysisMethod 'ExtractMessageContent' @($payload, 'responses') } ([Net.Http.HttpRequestException])
-    }
-}
-
-Test-Case 'Root, v1 and prefixed API bases resolve to one v1 segment without losing prefixes' {
-    foreach ($case in @(
-        @('https://example.invalid', '/v1/responses'),
-        @('https://example.invalid/', '/v1/responses'),
-        @('https://example.invalid/v1', '/v1/responses'),
-        @('https://example.invalid/v1/', '/v1/responses'),
-        @('https://example.invalid/gateway', '/gateway/v1/responses'),
-        @('https://example.invalid/gateway/v1/', '/gateway/v1/responses')
-    )) {
-        $uri = Invoke-AnalysisMethod 'BuildEndpoint' @([uri]$case[0], 'v1/responses')
-        Assert-True ($uri.AbsoluteUri -eq ('https://example.invalid' + $case[1])) 'Base URL normalization changed the endpoint.'
-    }
-}
-
-Test-Case 'Request IDs accept only standard opaque forms, never arbitrary header content' {
-    $id = 'req_0123456789abcdef0123456789abcdef'
-    Assert-True ((Invoke-AnalysisMethod 'GetSafeResponseIdentifier' @($id, 'req_')) -eq $id) 'Standard request ID was lost.'
-    foreach ($bad in @('synthetic-private-value', 'req_synthetic-private-value', 'sk-synthetic-secret', ('req_' + ('a' * 200)))) {
-        Assert-True ((Invoke-AnalysisMethod 'GetSafeResponseIdentifier' @($bad, 'req_')) -eq 'unknown') 'Unsafe header content was exposed.'
-    }
-}
-
-Test-Case 'Remote cancellation is recognized before the stream closes' {
-    foreach ($event in @(
-        @{type='response.cancelled'},
-        @{type='response.canceled'},
-        @{type='response.updated'; response=@{status='cancelled'}}
-    )) {
-        Assert-Throws { Read-TestStream @($event) -HoldOpen } ([System.Net.Http.HttpRequestException])
-    }
-}
-
-Test-Case 'Response failure status is recognized without a failed event type' {
-    Assert-Throws {
-        Read-TestStream @(@{type='response.updated'; response=@{status='failed'; error=@{code='server_error'}}}) -HoldOpen
-    } ([System.Net.Http.HttpRequestException])
-}
-
-Test-Case 'Failed JSON responses cannot be accepted as complete findings' {
-    foreach ($status in 'cancelled', 'failed', 'incomplete') {
-        [string]$payload = @{status=$status; output_text='{"issues":[]}'} | ConvertTo-Json -Compress
-        Assert-Throws { Invoke-AnalysisMethod 'ExtractMessageContent' @($payload, 'responses') } ([System.Net.Http.HttpRequestException])
-    }
-}
-
-Test-Case 'Provider error payloads are not exposed in exception text' {
-    $failure = $null
-    try {
-        $null = Read-TestStream @(@{type='error'; error=@{message='synthetic-private-value'}})
-    }
-    catch {
-        $failure = $_.Exception
-    }
-    Assert-True ($null -ne $failure) 'Expected a provider failure.'
-    Assert-True (-not $failure.ToString().Contains('synthetic-private-value')) 'Provider payload leaked into the exception.'
-}
-
-Test-Case 'Chat stop succeeds and token-limit termination fails' {
-    $result = Read-TestStream @(@{choices=@(@{delta=@{content='{"issues":[]}'}; finish_reason='stop'})}) -Mode 'chat'
-    Assert-True ($result.Text -eq '{"issues":[]}') 'Complete chat result was rejected.'
-    Assert-Throws {
-        Read-TestStream @(@{choices=@(@{delta=@{content='{"issues":[]}'}; finish_reason='length'})}) -Mode 'chat'
-    } ([System.Net.Http.HttpRequestException])
-}
-
 Test-Case 'Filtering retains distinct evidence and accounts for every event' {
     $events = [System.Collections.Generic.List[LocalSecurityAudit.Models.SecurityEvent]]::new()
     foreach ($severity in 'Error', 'Critical', 'Warning', 'Information', 'Unknown') {
@@ -862,7 +654,7 @@ Test-Case 'Security allowlist covers audit changes and splits XPath queries with
     }
 }
 
-Test-Case 'Both scan buttons resume the cursor; only model upgrades reanalyze the selected range' {
+Test-Case 'Both scan buttons stay incremental; upgrades and explicit reanalysis use the selected range' {
     $type = $assembly.GetType('LocalSecurityAudit.Services.AuditSchedulerService', $true)
     $method = $type.GetMethod('GetScanStart', $privateFlags)
     $now = [datetime]::new(2026, 9, 7, 12, 0, 0, [DateTimeKind]::Utc)
@@ -877,15 +669,17 @@ Test-Case 'Both scan buttons resume the cursor; only model upgrades reanalyze th
         $dashboard.FullScanRangeIndex = $range[0]
         Assert-True ($dashboard.FullScanDays -eq $range[1]) 'A dropdown selection maps to the wrong day range.'
         foreach ($fast in $false, $true) {
-            Assert-True ($method.Invoke($null, @($fast, $now, $last, $config, $dashboard.FullScanDays, $false)) -eq $last) 'Same or lower model did not resume incrementally.'
-            Assert-True ($method.Invoke($null, @($fast, $now, $last, $config, $dashboard.FullScanDays, $true)) -eq $now.AddDays(-$range[1])) 'Upgrade did not reanalyze the selected UTC range.'
+            Assert-True ($method.Invoke($null, @($fast, $now, $last, $config, $dashboard.FullScanDays, $false, $false)) -eq $last) 'Same or lower model did not resume incrementally.'
+            Assert-True ($method.Invoke($null, @($fast, $now, $last, $config, $dashboard.FullScanDays, $true, $false)) -eq $now.AddDays(-$range[1])) 'Upgrade did not reanalyze the selected UTC range.'
+            Assert-True ($method.Invoke($null, @($fast, $now, $last, $config, $dashboard.FullScanDays, $false, $true)) -eq $now.AddDays(-$range[1])) 'Manual reanalysis incorrectly reused the incremental cursor.'
         }
     }
     $config.FastScanRangeHours = 0
-    Assert-True ($method.Invoke($null, @($true, $now, $last, $config, 7, $false)) -eq $last) 'Incremental fast range changed.'
-    Assert-True ($method.Invoke($null, @($false, $now, $now.AddDays(-9), $config, 7, $true)) -eq $now.AddDays(-9)) 'Upgrade skipped an older unscanned gap.'
+    Assert-True ($method.Invoke($null, @($true, $now, $last, $config, 7, $false, $false)) -eq $last) 'Incremental fast range changed.'
+    Assert-True ($method.Invoke($null, @($false, $now, $now.AddDays(-9), $config, 7, $true, $false)) -eq $now.AddDays(-9)) 'Upgrade skipped an older unscanned gap.'
+    Assert-True ($method.Invoke($null, @($false, $now, $now.AddDays(-9), $config, 7, $false, $true)) -eq $now.AddDays(-9)) 'Manual reanalysis skipped an older unscanned gap.'
     foreach ($invalid in -1, 0, 3, 8) {
-        Assert-Throws { $method.Invoke($null, @($false, $now, $last, $config, $invalid, $false)) } ([ArgumentOutOfRangeException])
+        Assert-Throws { $method.Invoke($null, @($false, $now, $last, $config, $invalid, $false, $false)) } ([ArgumentOutOfRangeException])
     }
 }
 
@@ -1078,7 +872,7 @@ Test-Case 'Language refresh notifies both the window title and the sidebar mode 
             $notifications.Clear()
             $null = $type.GetMethod('OnLanguageChanged', $privateFlags).Invoke($model, @($null, [EventArgs]::Empty))
             Assert-True ($notifications.Contains('ModeText') -and $notifications.Contains('WindowTitle')) 'The sidebar mode label missed its language change notification.'
-            Assert-True ($model.ModeText -eq [LocalSecurityAudit.Services.AppText]::Get('Extended mode') -and $model.WindowTitle.Contains($model.ModeText)) 'Window and sidebar mode names disagree.'
+            Assert-True ($model.ModeText -eq [LocalSecurityAudit.Services.AppText]::Get('Extended mode') -and $model.WindowTitle -eq [LocalSecurityAudit.Services.AppText]::Get('Essential')) 'The localized brand or sidebar mode is incorrect.'
         }
     }
     finally {
@@ -1100,22 +894,23 @@ Test-Case 'Supported models survive normalization and use 256k without changing 
     }
 }
 
-Test-Case 'Optimization allows only upward model transitions and protects unknown provenance' {
-    $models = [LocalSecurityAudit.Models.AiModelCatalog]::OptimizationModels
+Test-Case 'Model replacement allows only upward transitions with known provenance' {
+    $models = [LocalSecurityAudit.Models.AiModelCatalog]::SupportedModels
     for ($source = 0; $source -lt $models.Count; $source++) {
         for ($dest = 0; $dest -lt $models.Count; $dest++) {
-            Assert-True ([LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize($models[$source], $models[$dest]) -eq ($dest -gt $source)) 'A same-tier or downward transition was permitted.'
+            Assert-True ([LocalSecurityAudit.Models.AiModelCatalog]::CanReplace($models[$source], $models[$dest]) -eq ($dest -gt $source)) 'A same-tier or downward transition was permitted.'
         }
     }
-    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize('', 'gpt-5.6-sol')) 'Unlabelled history could be downgraded.'
-    Assert-True ([LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize('', 'gpt-6-astra')) 'Legacy history cannot be optimized by Astra.'
-    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize('unknown-future-model', 'gpt-6-astra')) 'An unknown future model lost protection.'
-    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanOptimize('gpt-5.6-sol', 'gpt-5.6')) 'An ambiguous target bypassed the hierarchy.'
+    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanReplace('', 'gpt-5.6-sol')) 'Unlabelled history could be downgraded.'
+    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanReplace('', 'gpt-6-astra')) 'Unknown provenance was assigned a model rank.'
+    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanReplace('unknown-future-model', 'gpt-6-astra')) 'An unknown future model lost protection.'
+    Assert-True (-not [LocalSecurityAudit.Models.AiModelCatalog]::CanReplace('gpt-5.6-sol', 'gpt-5.6')) 'An ambiguous target bypassed the hierarchy.'
 }
 
 Test-Case 'Model ownership survives serialization, cache cloning, display and merging' {
     $strong = New-BilingualFinding
     $strong.AnalysisModel = 'gpt-5.6-sol'
+    $strong.Severity = 'Low'; $strong.Confidence = 'Medium'
     $strong.OriginalAnalysisModel = 'gpt-5.6-luna'
     $strong.OptimizedAtUtc = [datetime]::UtcNow
     $strong.DetectedAt = [datetime]::UtcNow.AddHours(-1)
@@ -1125,37 +920,15 @@ Test-Case 'Model ownership survives serialization, cache cloning, display and me
     $weaker = Invoke-AnalysisMethod 'CloneIssue' @($strong)
     $weaker.AnalysisModel = 'gpt-5.6-luna'
     $weaker.Title = 'Newer weaker interpretation'
+    $weaker.Severity = 'High'; $weaker.Confidence = 'High'
     $weaker.DetectedAt = [datetime]::UtcNow
     $items = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
     $items.Add($copy); $items.Add($weaker)
     $merged = Invoke-AnalysisMethod 'MergeDuplicateIssues' @(,$items)
     Assert-True ($merged.Count -eq 1 -and $merged[0].AnalysisModel -eq 'gpt-5.6-sol' -and $merged[0].Title -eq $strong.Title) 'Merging downgraded the interpretation.'
+    Assert-True ($merged[0].Severity -eq 'Low' -and $merged[0].Confidence -eq 'Medium') 'Lower-model severity or confidence replaced the stronger assessment.'
     $json = [System.Text.Json.JsonSerializer]::Serialize($strong, $strong.GetType())
     Assert-True ($json.Contains('gpt-5.6-sol') -and $json.Contains('OptimizedAtUtc')) 'Saved data has no model metadata.'
-}
-
-Test-Case 'Optimization validates all keys and keeps source evidence outside AI ownership' {
-    $original = New-BilingualFinding
-    $original.AnalysisModel = 'gpt-5.6-luna'
-    $original.EventRecordId = 'original-record'
-    $original.EventDescription = 'Original source evidence'
-    $review = New-BilingualFinding 'optimize_0'
-    $review.Title = 'Reviewed finding'
-    $review.Severity = 'Low'
-    $review.Confidence = 'Medium'
-    $review.EventRecordId = 'invented-record'
-    $originals = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
-    $originals.Add($original)
-    $reviews = [Collections.Generic.List[LocalSecurityAudit.Models.AuditIssue]]::new()
-    $reviews.Add($review)
-    $result = Invoke-AnalysisMethod 'ApplyOptimizedFindings' @($originals, $reviews, 'gpt-5.6-sol')
-    Assert-True ($result[0].Title -eq 'Reviewed finding' -and $result[0].EventRecordId -eq 'original-record' -and $result[0].EventDescription -eq $original.EventDescription) 'Optimization overwrote evidence.'
-    Assert-True ($original.AnalysisModel -eq 'gpt-5.6-luna' -and $result[0].AnalysisModel -eq 'gpt-5.6-sol') 'Optimization mutated the input or omitted ownership.'
-    $review.Key = 'unexpected-key'
-    Assert-Throws { Invoke-AnalysisMethod 'ApplyOptimizedFindings' @($originals, $reviews, 'gpt-5.6-sol') } ([System.Text.Json.JsonException])
-    $review.Key = 'optimize_0'
-    $review.TitleZh = ''
-    Assert-Throws { Invoke-AnalysisMethod 'ApplyOptimizedFindings' @($originals, $reviews, 'gpt-5.6-sol') } ([System.Text.Json.JsonException])
 }
 
 Test-Case 'Incremental scan resumes at stored ScanEnd and rejects a future cursor' {

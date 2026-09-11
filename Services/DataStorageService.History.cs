@@ -10,7 +10,7 @@ namespace LocalSecurityAudit.Services;
 
 public partial class DataStorageService
 {
-    public int RejectedAssistantRecords { get; private set; }
+    public int RejectedLegacyRecords { get; private set; }
 
     private async IAsyncEnumerable<AuditResult> ReadHistoryAsync(DateTime? startUtc = null, DateTime? endUtc = null)
     {
@@ -32,8 +32,8 @@ public partial class DataStorageService
             {
                 anyRows = true;
                 var result = ReadResult(reader);
-                if ((path == _historyPaths[1] || result != null && AuditHistory.Text(result, "Mode") == AppMode.Assistant)
-                    && (result == null || !AuditHistory.ValidateAssistant(result)))
+                if ((path == _historyPaths[1] || result != null && AuditHistory.Text(result, "Mode") == "assistant")
+                    && (result == null || !AuditHistory.ValidateLegacyResult(result)))
                 { rejected++; continue; }
                 if (result == null) continue;
                 string run = AuditHistory.Text(result, "RunId");
@@ -42,7 +42,7 @@ public partial class DataStorageService
                 yield return result;
             }
         }
-        RejectedAssistantRecords = rejected;
+        RejectedLegacyRecords = rejected;
         if (anyRows && !anyValid) throw new InvalidDataException(AppText.Get("No readable audit records were found."));
     }
 

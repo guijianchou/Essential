@@ -1,7 +1,7 @@
 # Headless tests of the actual guard with private random keys and temporary files.
 # Never launches/kills the audit app, reads user settings, collects logs or requests UAC.
 param(
-    [string]$AssemblyPath = "$PSScriptRoot\..\bin\x64\Release\LocalSecurityAudit-0.3.8\net8.0-windows10.0.19041.0\LocalSecurityAudit.dll",
+    [string]$AssemblyPath = "$PSScriptRoot\..\artifacts\bin\x64\Release\net8.0-windows10.0.19041.0\Essential.dll",
     [switch]$Child,
     [string]$Key,
     [string]$ResultPath,
@@ -89,7 +89,7 @@ try {
         Assert-True ($counter.Count -gt 0) 'Existing-window activation was not delivered.'
     }
     Test-Case 'A different build directory shares the same primary' {
-        $copyPath = Join-Path $testRoot 'LocalSecurityAudit.dll'
+        $copyPath = Join-Path $testRoot 'Essential.dll'
         # The assembly's Windows App SDK module initializer needs its bundled DLLs.
         foreach ($dependency in (Get-ChildItem -LiteralPath (Split-Path -Parent $assembly.Location) -File -Filter '*.dll')) {
             Copy-Item -LiteralPath $dependency.FullName -Destination (Join-Path $testRoot $dependency.Name)

@@ -24,7 +24,6 @@ public partial class SettingsViewModel : ObservableObject
 
     private readonly DataStorageService _storageService;
     private readonly SettingsService _settingsService;
-    private readonly AiAnalysisService _aiAnalysisService;
     private readonly DiagnosticLogService _diagnosticLogService;
     private readonly KernelManagerService _kernelManagerService;
     private readonly AuditSchedulerService _schedulerService;
@@ -33,12 +32,8 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int modeIndex;
 
-    public bool IsAssistantMode => _settingsService.IsAssistantMode;
-    public bool IsExtendedMode => !IsAssistantMode;
     public string ActiveModeText => AppText.Get(AppMode.Label(_settingsService.ActiveMode));
     public string DatabasePath => _storageService.DatabasePath;
-    public string AssistantDatabasePath => DataStorageService.GetDatabasePath(AppMode.Assistant);
-    public string AssistantGuidePath => Path.Combine(AppContext.BaseDirectory, "AGENTS.md");
     public bool IsModeChangePending => _settingsService.Current.Mode != _settingsService.ActiveMode;
 
     [ObservableProperty]
@@ -64,6 +59,9 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private int languageIndex;
+
+    [ObservableProperty]
+    private int tokenUsagePeriodIndex;
 
     [ObservableProperty]
     private int kernelIndex;
@@ -102,7 +100,7 @@ public partial class SettingsViewModel : ObservableObject
     private bool diagnosticLoggingEnabled;
 
     [ObservableProperty]
-    private string agentInstructions = "";
+    private string securityAuditInstructions = "";
 
     [ObservableProperty]
     private string policyStatusText = AppText.Get("Built-in policy");
@@ -129,20 +127,21 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string activeTargetSummary = "";
 
-    public string AgentInstructionsPath => _settingsService.AgentInstructionsPath;
+    public string SecurityAuditTaskId => HubTaskCatalog.SecurityAuditId;
+    public string SecurityAuditTaskTitle => AppText.Get(HubTaskCatalog.Get(SecurityAuditTaskId).Title);
+    public string SecurityAuditTaskGlyph => HubTaskCatalog.Get(SecurityAuditTaskId).Glyph;
+    public string SecurityAuditInstructionsPath => _settingsService.GetTaskInstructionsPath(SecurityAuditTaskId);
     public string DiagnosticLogPath => _diagnosticLogService.LogPath;
 
     public SettingsViewModel(
         DataStorageService storageService,
         SettingsService settingsService,
-        AiAnalysisService aiAnalysisService,
         DiagnosticLogService diagnosticLogService,
         AuditSchedulerService schedulerService,
         KernelManagerService kernelManagerService)
     {
         _storageService = storageService;
         _settingsService = settingsService;
-        _aiAnalysisService = aiAnalysisService;
         _diagnosticLogService = diagnosticLogService;
         _schedulerService = schedulerService;
         _kernelManagerService = kernelManagerService;
@@ -153,10 +152,10 @@ public partial class SettingsViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(VersionText));
             OnPropertyChanged(nameof(ActiveModeText));
+            OnPropertyChanged(nameof(SecurityAuditTaskTitle));
             UpdatePipelineSummary();
             UpdateKernelStatus();
-            UpdatePolicyStatus(AgentInstructions);
-            _ = RefreshOptimizationPreviewAsync();
+            UpdatePolicyStatus(SecurityAuditInstructions);
         };
         LoadFromSettings(_settingsService.Current);
         _schedulerService.HistoryUpdated += (_, _) => _ = UpdateDatabaseStatsAsync();
@@ -167,7 +166,7 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveSettingsAsync()
     {
-        if (IsBusy || IsOptimizing)
+        if (IsBusy)
         {
             return;
         }
@@ -196,7 +195,7 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveModeAndExitAsync()
     {
-        if (IsBusy || IsOptimizing || _schedulerService.IsScanning)
+        if (IsBusy || _schedulerService.IsScanning)
         {
             ShowStatus(InfoBarSeverity.Warning, AppText.Get("Wait for the current operation to finish before switching modes."));
             return;
@@ -213,30 +212,6 @@ public partial class SettingsViewModel : ObservableObject
             ShowStatus(InfoBarSeverity.Error, AppText.Format("Save failed: {0}", ex.Message));
         }
         finally { IsBusy = false; }
-    }
-
-    [RelayCommand]
-    private void OpenAssistantGuide()
-    {
-        try { Process.Start(new ProcessStartInfo(AssistantGuidePath) { UseShellExecute = true })?.Dispose(); }
-        catch { ShowStatus(InfoBarSeverity.Warning, AppText.Get("Open the AGENTS.md path below in a text editor.")); }
-    }
-
-    [RelayCommand]
-    private void CopyAssistantPrompt()
-    {
-        var data = new DataPackage();
-        data.SetText(AppText.Format("Read {0} and perform one assistant audit using shared progress and the actual model. Use a seven-day baseline initially or on model upgrade, otherwise continue incrementally. Split the baseline into adjacent daily batches. Skip Security. Validate before publishing to {1}. Do not start subagents, change system settings, elevate, or call the app's AI Hub.",
-            AssistantGuidePath, AssistantDatabasePath));
-        try
-        {
-            Clipboard.SetContent(data);
-            ShowStatus(InfoBarSeverity.Success, AppText.Get("Audit prompt copied. Paste it into your own Claude or Codex session."));
-        }
-        catch
-        {
-            ShowStatus(InfoBarSeverity.Warning, AppText.Get("The clipboard is unavailable. Open AGENTS.md to copy the workflow manually."));
-        }
     }
 
     [RelayCommand]
@@ -258,6 +233,7 @@ public partial class SettingsViewModel : ObservableObject
         };
         MinimizeToTray = defaults.MinimizeToTray;
         LanguageIndex = defaults.Language == "zh-CN" ? 1 : 0;
+        TokenUsagePeriodIndex = 0;
         ShowStatus(InfoBarSeverity.Informational, AppText.Get("Appearance defaults restored. Save to apply them."));
     }
 
@@ -265,7 +241,6 @@ public partial class SettingsViewModel : ObservableObject
     private void ResetAiSettings()
     {
         var defaults = _settingsService.CreateDefaultSettings();
-        AgentInstructions = defaults.AgentInstructions;
         LoadTargets(defaults.AiTargets);
         ShowStatus(InfoBarSeverity.Informational, AppText.Get("AI defaults restored. Save to apply them."));
     }
@@ -298,16 +273,16 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ResetAgentInstructions()
+    private void ResetSecurityAuditInstructions()
     {
-        AgentInstructions = SettingsService.DefaultAgentInstructions;
+        SecurityAuditInstructions = SettingsService.DefaultSecurityAuditInstructions;
         ShowStatus(InfoBarSeverity.Informational, AppText.Get("Built-in audit policy restored. Save to apply it."));
     }
 
     [RelayCommand]
     private async Task TestApiConnectionAsync(AiTarget? target)
     {
-        if (IsAssistantMode || target == null || IsBusy)
+        if (target == null || IsBusy)
         {
             return;
         }
@@ -315,9 +290,10 @@ public partial class SettingsViewModel : ObservableObject
         try
         {
             IsBusy = true;
-            var result = await _aiAnalysisService.TestConnectionAsync(target);
+            ShowStatus(InfoBarSeverity.Informational, AppText.Format("Testing {0} connection...", SelectedKernel));
+            var result = await _schedulerService.TestConnectionAsync(target, SelectedKernel);
             ShowStatus(
-                result.Success ? InfoBarSeverity.Success : InfoBarSeverity.Warning,
+                result.Success ? InfoBarSeverity.Success : InfoBarSeverity.Error,
                 $"{target.Name}: {result.Message}");
         }
         catch (Exception ex)
@@ -333,25 +309,33 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task DownloadKernelAsync()
     {
-        if (IsAssistantMode || IsBusy)
+        if (IsBusy)
         {
+            return;
+        }
+        if (_schedulerService.IsScanning)
+        {
+            ShowStatus(InfoBarSeverity.Warning, AppText.Get("Wait for the current operation to finish before updating a kernel."));
             return;
         }
 
         string kernel = SelectedKernel;
-        if (kernel == AiKernelCatalog.Http)
-        {
-            ShowStatus(InfoBarSeverity.Informational, AppText.Get("HTTP uses the configured endpoint and does not need a kernel download."));
-            return;
-        }
-
         try
         {
             IsBusy = true;
-            ShowStatus(InfoBarSeverity.Informational, AppText.Format("Downloading {0} kernel...", kernel));
-            await _kernelManagerService.DownloadOrUpdateAsync(kernel);
+            ShowStatus(InfoBarSeverity.Informational, AppText.Format("Checking {0} versions before downloading...", kernel));
+            var result = await _kernelManagerService.DownloadOrUpdateAsync(kernel);
             UpdateKernelStatus();
-            ShowStatus(InfoBarSeverity.Success, AppText.Format("{0} kernel is ready.", kernel));
+            KernelLatestText = result.UsedBundledArchive
+                ? AppText.Get("Installed from the bundled archive; latest release was not verified.")
+                : AppText.Format("Latest official release: {0}", result.LatestVersion);
+            string message = result.UsedBundledArchive ? "{0} kernel {1} installed from the bundled archive."
+                : result.Changed ? "{0} kernel updated to {1}."
+                : KernelManagerService.CompareVersions(result.Status.Version, result.LatestVersion) > 0
+                    ? "{0} kernel {1} is newer than the latest official release. No download needed."
+                    : "{0} kernel {1} is up to date. No download needed.";
+            ShowStatus(InfoBarSeverity.Success, AppText.Format(message, kernel, result.Status.Version));
+            _diagnosticLogService.Write($"Kernel update checked: kernel={kernel}, local={result.Status.Version}, latest={result.LatestVersion}, changed={result.Changed}, bundled={result.UsedBundledArchive}");
         }
         catch (Exception ex)
         {
@@ -367,21 +351,17 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task CheckKernelUpdatesAsync()
     {
-        if (IsAssistantMode || IsBusy)
+        if (IsBusy)
         {
             return;
         }
 
         string kernel = SelectedKernel;
-        if (kernel == AiKernelCatalog.Http)
-        {
-            KernelLatestText = AppText.Get("HTTP transport has no separate kernel release.");
-            return;
-        }
-
         try
         {
             IsBusy = true;
+            await _kernelManagerService.GetStatusAsync(kernel);
+            UpdateKernelStatus();
             string latest = await _kernelManagerService.CheckLatestVersionAsync(kernel);
             KernelLatestText = AppText.Format("Latest official release: {0}", latest);
         }
@@ -396,19 +376,33 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void RefreshKernelStatus() => UpdateKernelStatus();
+    private async Task RefreshKernelStatusAsync()
+    {
+        if (IsBusy) return;
+        try
+        {
+            IsBusy = true;
+            await _kernelManagerService.GetStatusAsync(SelectedKernel);
+            UpdateKernelStatus();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus(InfoBarSeverity.Error, AppText.Format("Kernel version check failed: {0}", ex.Message));
+        }
+        finally { IsBusy = false; }
+    }
 
     public IReadOnlyList<string> KernelOptions => AiKernelCatalog.Kernels;
 
     private string SelectedKernel => KernelIndex switch
     {
-        1 => AiKernelCatalog.Codex,
-        2 => AiKernelCatalog.Pi,
-        _ => AiKernelCatalog.Http
+        1 => AiKernelCatalog.Pi,
+        _ => AiKernelCatalog.Codex
     };
 
     partial void OnKernelIndexChanged(int value)
     {
+        KernelLatestText = AppText.Get("Latest release not checked.");
         UpdateKernelStatus();
         UpdatePipelineSummary();
     }
@@ -416,23 +410,17 @@ public partial class SettingsViewModel : ObservableObject
     private void UpdateKernelStatus()
     {
         var status = _kernelManagerService.GetStatus(SelectedKernel);
-        KernelStatusText = status.Kernel == AiKernelCatalog.Http
-            ? AppText.Get("Built-in HTTP transport")
-            : status.Installed
-                ? AppText.Format("Installed · {0}", status.Version)
+        KernelStatusText = status.Installed
+                ? AppText.Format("Installed · {0}", string.IsNullOrEmpty(status.Version) ? AppText.Get("Version not checked") : status.Version)
                 : AppText.Get("Not installed · download required");
-        KernelPathText = status.Kernel == AiKernelCatalog.Http
-            ? AppText.Get("Uses the configured AI Hub endpoint")
-            : status.Path;
-        KernelLatestText = status.Kernel == AiKernelCatalog.Http
-            ? AppText.Get("HTTP transport has no separate kernel release.")
-            : AppText.Get("Latest release not checked.");
+        KernelPathText = status.Path;
+        if (string.IsNullOrEmpty(KernelLatestText)) KernelLatestText = AppText.Get("Latest release not checked.");
     }
 
     [RelayCommand]
     private async Task CleanupDataAsync()
     {
-        if (IsAssistantMode || IsBusy)
+        if (IsBusy)
         {
             return;
         }
@@ -457,7 +445,7 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task VacuumDatabaseAsync()
     {
-        if (IsAssistantMode || IsBusy)
+        if (IsBusy)
         {
             return;
         }
@@ -471,7 +459,7 @@ public partial class SettingsViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            ShowStatus(InfoBarSeverity.Error, AppText.Format("Optimization failed: {0}", ex.Message));
+            ShowStatus(InfoBarSeverity.Error, AppText.Format("Database vacuum failed: {0}", ex.Message));
         }
         finally
         {
@@ -536,7 +524,7 @@ public partial class SettingsViewModel : ObservableObject
         UpdatePipelineSummary();
     }
 
-    partial void OnAgentInstructionsChanged(string value)
+    partial void OnSecurityAuditInstructionsChanged(string value)
     {
         UpdatePolicyStatus(value);
     }
@@ -549,7 +537,7 @@ public partial class SettingsViewModel : ObservableObject
     private void UpdatePolicyStatus(string value)
     {
         string normalized = (value ?? string.Empty).Replace("\r\n", "\n").Trim();
-        string builtIn = SettingsService.DefaultAgentInstructions.Replace("\r\n", "\n").Trim();
+        string builtIn = SettingsService.DefaultSecurityAuditInstructions.Replace("\r\n", "\n").Trim();
         if (normalized == builtIn)
         {
             PolicyStatusText = AppText.Get("Built-in policy");
@@ -628,9 +616,6 @@ public partial class SettingsViewModel : ObservableObject
         else
         {
             string host = Uri.TryCreate(target.BaseUrl.Trim(), UriKind.Absolute, out var uri) ? uri.Host : target.BaseUrl.Trim();
-            string route = string.Equals(target.Mode, "chat", StringComparison.OrdinalIgnoreCase)
-                ? "POST /v1/chat/completions"
-                : "POST /v1/responses";
             string key = string.IsNullOrWhiteSpace(target.ApiKey) ? AppText.Get("no API key") : AppText.Get("API key set");
             var fallback = AiTargets.FirstOrDefault(candidate =>
                 string.Equals(candidate.Name, AiTargetSettings.FallbackName, StringComparison.OrdinalIgnoreCase));
@@ -638,7 +623,7 @@ public partial class SettingsViewModel : ObservableObject
                 ? AppText.Get("fallback empty")
                 : AppText.Format("fallback {0}", fallback.BaseUrl);
             ActiveTargetSummary = $"{target.Name}: {host}, {key}; {fallbackSummary}";
-            PipelineAnalyzeText = AppText.Format("{0} at {1} via streaming {2}, reasoning effort {3}, 256k context; failover uses the optional fallback route.", target.Model, host, route, target.Effort);
+            PipelineAnalyzeText = AppText.Format("{0} via {1} at {2}, reasoning effort {3}; failover uses the optional fallback route.", target.Model, SelectedKernel, host, target.Effort);
         }
 
         PipelineParseText = AppText.Get("English and Chinese analysis are validated together. Categories and severities are normalized, repeated patterns are merged.");
@@ -647,12 +632,12 @@ public partial class SettingsViewModel : ObservableObject
 
     private void LoadFromSettings(AppSettings settings)
     {
-        ModeIndex = settings.Mode switch { AppMode.Full => 2, AppMode.Extended => 1, _ => 0 };
+        ModeIndex = settings.Mode == AppMode.Full ? 1 : 0;
         LanguageIndex = settings.Language == "zh-CN" ? 1 : 0;
+        TokenUsagePeriodIndex = settings.TokenUsagePeriod switch { "week" => 1, "month" => 2, _ => 0 };
         KernelIndex = AiKernelCatalog.Normalize(settings.AiKernel) switch
         {
-            AiKernelCatalog.Codex => 1,
-            AiKernelCatalog.Pi => 2,
+            AiKernelCatalog.Pi => 1,
             _ => 0
         };
         AutoScanEnabled = settings.AutoScanEnabled;
@@ -690,9 +675,8 @@ public partial class SettingsViewModel : ObservableObject
         HighSeverityNotification = settings.HighSeverityNotification;
         ScanCompleteNotification = settings.ScanCompleteNotification;
         DiagnosticLoggingEnabled = settings.DiagnosticLoggingEnabled;
-        AgentInstructions = settings.AgentInstructions;
-        OptimizationModel = settings.OptimizationModel;
-        UpdatePolicyStatus(AgentInstructions);
+        SecurityAuditInstructions = settings.SecurityAuditInstructions;
+        UpdatePolicyStatus(SecurityAuditInstructions);
 
         LoadTargets(settings.AiTargets);
     }
@@ -737,8 +721,9 @@ public partial class SettingsViewModel : ObservableObject
     {
         return new AppSettings
         {
-            Mode = ModeIndex switch { 2 => AppMode.Full, 1 => AppMode.Extended, _ => AppMode.Assistant },
+            Mode = ModeIndex == 1 ? AppMode.Full : AppMode.Extended,
             Language = LanguageIndex == 1 ? "zh-CN" : "en",
+            TokenUsagePeriod = TokenUsagePeriodIndex switch { 1 => "week", 2 => "month", _ => "day" },
             Theme = ThemeIndex switch
             {
                 1 => "light",
@@ -762,12 +747,11 @@ public partial class SettingsViewModel : ObservableObject
             HighSeverityNotification = HighSeverityNotification,
             ScanCompleteNotification = ScanCompleteNotification,
             DiagnosticLoggingEnabled = DiagnosticLoggingEnabled,
-            AgentInstructions = AgentInstructions,
+            SecurityAuditInstructions = SecurityAuditInstructions,
             AiKernel = SelectedKernel,
             MaxConcurrentAnalysis = _settingsService.Current.MaxConcurrentAnalysis,
             EnableSmartFiltering = _settingsService.Current.EnableSmartFiltering,
             EnableCaching = _settingsService.Current.EnableCaching,
-            OptimizationModel = OptimizationModel,
             AiTargets = AiTargets.Select(target => new AiTargetSettings
             {
                 Name = target.Name,

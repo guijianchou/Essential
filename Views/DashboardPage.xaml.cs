@@ -58,23 +58,15 @@ public sealed partial class DashboardPage : Page
         {
             // Keep date navigation available while only the result panels transition.
             ContentMotion.SetLoading(HealthScoreContent, ViewModel.IsDateLoading);
+            ContentMotion.SetLoading(AuditSummaryContent, ViewModel.IsDateLoading);
             ContentMotion.SetLoading(AuditDetailsContent, ViewModel.IsDateLoading);
             ContentMotion.SetLoading(FindingsContent, ViewModel.IsDateLoading);
         }
     }
 
-    /// <summary>
-    /// The meter is two star-sized columns: the fill takes <c>score</c> parts and the rest
-    /// <c>100 - score</c>, so it needs no measuring code and resizes with the card.
-    /// </summary>
     private void ApplyHealthPresentation()
     {
         bool hasAuditData = ViewModel.HasAssessment;
-        int score = Math.Clamp(ViewModel.HealthScore, 0, 100);
-
-        HealthMeterFillColumn.Width = new GridLength(hasAuditData ? score : 0, GridUnitType.Star);
-        HealthMeterRestColumn.Width = new GridLength(hasAuditData ? 100 - score : 100, GridUnitType.Star);
-        HealthMeterFill.Visibility = hasAuditData && score > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         string brushKey = !hasAuditData
             ? "TextFillColorTertiaryBrush"
@@ -89,7 +81,6 @@ public sealed partial class DashboardPage : Page
         if (brush != null)
         {
             HealthDot.Fill = brush;
-            HealthMeterFill.Background = brush;
         }
     }
 
@@ -102,13 +93,13 @@ public sealed partial class DashboardPage : Page
         }
     }
 
-    private void OnDayClick(object sender, RoutedEventArgs e)
+    private void OnAuditDateChanged(CalendarDatePicker sender, CalendarDatePickerDateChangedEventArgs args)
     {
-        if (sender is ToggleButton { Tag: DashboardDay day } button)
-        {
-            ViewModel.SelectDayCommand.Execute(day);
-            button.IsChecked = true;
-        }
+        if (ViewModel.SelectedAuditDate?.Date == args.NewDate?.Date) return;
+        if (args.NewDate is { } date)
+            ViewModel.SelectDayCommand.Execute(new DashboardDay { Date = date.Date });
+        else
+            ViewModel.SelectLatestCommand.Execute(null);
     }
 
     private void OnActivityRangeClick(object sender, RoutedEventArgs e)
@@ -125,6 +116,15 @@ public sealed partial class DashboardPage : Page
         if (sender is ToggleButton button && button.Tag is string log)
         {
             ViewModel.SetSourceFilterCommand.Execute(log);
+            button.IsChecked = true;
+        }
+    }
+
+    private void OnFindingsViewClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton button && button.Tag is string view)
+        {
+            ViewModel.SetFindingsViewCommand.Execute(view);
             button.IsChecked = true;
         }
     }

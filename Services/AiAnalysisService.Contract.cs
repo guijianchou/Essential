@@ -11,7 +11,7 @@ namespace LocalSecurityAudit.Services;
 /// <summary>
 /// The analysis contract: the system prompt sent with every batch, tolerant parsing of
 /// the model's JSON, normalization against the supplied events, and duplicate merging.
-/// Keep the field list here aligned with <see cref="SettingsService.DefaultAgentInstructions"/>.
+/// Keep the field list here aligned with <see cref="SettingsService.DefaultSecurityAuditInstructions"/>.
 /// </summary>
 public sealed partial class AiAnalysisService
 {
@@ -21,8 +21,8 @@ public sealed partial class AiAnalysisService
 
     private string BuildSystemPrompt()
     {
-        string agentInstructions = CompactPolicyText(_settingsService.Current.AgentInstructions ?? string.Empty);
-        agentInstructions = TruncateText(agentInstructions, MaxAgentInstructionChars);
+        string securityAuditInstructions = CompactPolicyText(_settingsService.GetTaskInstructions(HubTaskCatalog.SecurityAuditId) ?? string.Empty);
+        securityAuditInstructions = TruncateText(securityAuditInstructions, MaxAgentInstructionChars);
 
         var prompt = new StringBuilder();
         prompt.AppendLine("You are a Windows security audit expert. Analyze only the supplied event data.");
@@ -39,7 +39,7 @@ public sealed partial class AiAnalysisService
         prompt.AppendLine("event description, user name, provider name or other event field.");
         prompt.AppendLine();
         prompt.AppendLine("Audit policy supplied by the user (follow it unless it conflicts with the output contract below):");
-        prompt.AppendLine(agentInstructions);
+        prompt.AppendLine(securityAuditInstructions);
         prompt.AppendLine();
         prompt.AppendLine("Output contract (mandatory, overrides the policy where they differ): return exactly one");
         prompt.AppendLine("JSON object and nothing else. No Markdown, code fences, commentary or extra top-level");
@@ -503,20 +503,22 @@ public sealed partial class AiAnalysisService
         foreach (var issue in issues)
         {
             string? mergeKey = null;
+            string? unknownModel = AiModelCatalog.Rank(issue.AnalysisModel) < 0 ? issue.AnalysisModel : null;
             if (!string.IsNullOrWhiteSpace(issue.Key))
             {
-                mergeKey = JsonSerializer.Serialize(new[] { issue.LogName, issue.Source, issue.Category, "key", issue.Key, issue.Affected });
+                mergeKey = JsonSerializer.Serialize(new[] { issue.LogName, issue.Source, issue.Category, "key", issue.Key, issue.Affected, unknownModel });
             }
             else if (!string.IsNullOrWhiteSpace(issue.Title))
             {
-                mergeKey = JsonSerializer.Serialize(new[] { issue.LogName, issue.Source, issue.Category, issue.EventId, issue.Title.ToLowerInvariant(), issue.Affected });
+                mergeKey = JsonSerializer.Serialize(new[] { issue.LogName, issue.Source, issue.Category, issue.EventId, issue.Title.ToLowerInvariant(), issue.Affected, unknownModel });
             }
 
             if (mergeKey != null && byKey.TryGetValue(mergeKey, out var existing))
             {
                 bool newer = issue.DetectedAt > existing.DetectedAt;
-                bool replaceAnalysis = AiModelCatalog.CanOptimize(existing.AnalysisModel, issue.AnalysisModel)
-                    || (string.Equals(existing.AnalysisModel, issue.AnalysisModel, StringComparison.OrdinalIgnoreCase) && newer);
+                bool stronger = AiModelCatalog.CanReplace(existing.AnalysisModel, issue.AnalysisModel);
+                bool sameModel = string.Equals(existing.AnalysisModel, issue.AnalysisModel, StringComparison.OrdinalIgnoreCase);
+                bool replaceAnalysis = stronger || sameModel && newer;
                 existing.Occurrences += Math.Max(1, issue.Occurrences);
                 foreach (string relatedRef in issue.RelatedEventRefs)
                 {
@@ -526,12 +528,12 @@ public sealed partial class AiAnalysisService
                     }
                 }
 
-                if (SeverityRank(issue.Severity) > SeverityRank(existing.Severity))
+                if (stronger || sameModel && SeverityRank(issue.Severity) > SeverityRank(existing.Severity))
                 {
                     existing.Severity = issue.Severity;
                 }
 
-                if (ConfidenceRank(issue.Confidence) > ConfidenceRank(existing.Confidence))
+                if (stronger || sameModel && ConfidenceRank(issue.Confidence) > ConfidenceRank(existing.Confidence))
                 {
                     existing.Confidence = issue.Confidence;
                 }

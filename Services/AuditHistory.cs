@@ -32,7 +32,7 @@ public static class AuditHistory
     {
         if (Text(result, "CoverageStatus") is not ("complete" or "limited")) return false;
         if (result.Metadata?.TryGetValue("Channels", out var channels) != true || channels.ValueKind != JsonValueKind.Array)
-            return Text(result, "Mode") != AppMode.Assistant && Text(result, "CoverageStatus") == "complete"
+            return Text(result, "Mode") != "assistant" && Text(result, "CoverageStatus") == "complete"
                 && (log != "Security" || Text(result, "Mode") == AppMode.Full);
         var matches = channels.EnumerateArray().Where(channel => channel.ValueKind == JsonValueKind.Object
             && channel.TryGetProperty("LogName", out var name) && name.ValueKind == JsonValueKind.String && name.GetString() == log).ToList();
@@ -89,11 +89,11 @@ public static class AuditHistory
         return (cursor, rank);
     }
 
-    public static bool ValidateAssistant(AuditResult result)
+    public static bool ValidateLegacyResult(AuditResult result)
     {
         try
         {
-            if (Text(result, "Mode") != AppMode.Assistant || Count(result, "SchemaVersion") is not (1 or 2)
+            if (Text(result, "Mode") != "assistant" || Count(result, "SchemaVersion") is not (1 or 2)
                 || !Window(result, out var start, out var end) || end - start > TimeSpan.FromDays(1)
                 || !Guid.TryParseExact(Text(result, "RunId"), "D", out _)
                 || Text(result, "Producer") is not ("codex" or "claude")

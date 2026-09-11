@@ -42,7 +42,12 @@ public sealed class AuditProgressEventArgs : EventArgs
     public int CompletedUnits { get; init; }
     public int TotalUnits { get; init; }
     public int EstimatedInputTokens { get; init; }
+    public string RequestId { get; init; } = string.Empty;
+    public bool HasTokenUsage { get; init; }
+    public long InputTokens { get; init; }
+    public long OutputTokens { get; init; }
     public bool StartsScan { get; init; }
+    public bool IsConnectionTest { get; init; }
 
     public AuditProgressEventArgs(AuditStage stage, AuditStepState state, string message, params object?[] arguments)
     {

@@ -9,4 +9,6 @@ public sealed class AuditActivityDay
     public int Findings { get; set; }
     public int AssessedScans { get; set; }
     public int ScoreSum { get; set; }
+    public int ScopedAssessedScans { get; set; }
+    public int ScopedScoreSum { get; set; }
 }

@@ -113,15 +113,15 @@ Test-Case 'Policy write failure is reported, while unchanged read-only policy pe
     $type=$assembly.GetType('LocalSecurityAudit.Services.SettingsService')
     $service=[Runtime.CompilerServices.RuntimeHelpers]::GetUninitializedObject($type)
     $policy=Join-Path $root 'policy.md'; $config=Join-Path $root 'synthetic-settings.json'
-    $type.GetField('_settingsPath',$flags).SetValue($service,$config); $type.GetField('_agentInstructionsPath',$flags).SetValue($service,$policy)
-    $settings=[LocalSecurityAudit.Models.AppSettings]::new(); $settings.AgentInstructions='Original synthetic policy'; $settings.Language='en-US'
+    $type.GetField('_settingsPath',$flags).SetValue($service,$config); $type.GetField('_securityAuditInstructionsPath',$flags).SetValue($service,$policy)
+    $settings=[LocalSecurityAudit.Models.AppSettings]::new(); $settings.SecurityAuditInstructions='Original synthetic policy'; $settings.Language='en-US'
     $service.Save($settings); [IO.File]::SetAttributes($policy,[IO.FileAttributes]::ReadOnly)
     try {
         $settings.Language='zh-CN'; $service.Save($settings)
-        $settings.AgentInstructions='New synthetic policy'; $failed=$false
+        $settings.SecurityAuditInstructions='New synthetic policy'; $failed=$false
         try { $service.Save($settings) } catch { $failed=$true }
         Assert-True $failed 'Changed policy reported success even though it could not be persisted.'
-        Assert-True ((Get-Content -LiteralPath $config -Raw | ConvertFrom-Json).AgentInstructions -eq 'Original synthetic policy') 'Failed save changed persistent settings.'
+        Assert-True ((Get-Content -LiteralPath $config -Raw | ConvertFrom-Json).SecurityAuditInstructions -eq 'Original synthetic policy') 'Failed save changed persistent settings.'
     } finally { [IO.File]::SetAttributes($policy,[IO.FileAttributes]::Normal) }
 }
 "$script:passed passed; $script:failed failed. Synthetic fixtures: $root"

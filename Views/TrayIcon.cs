@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using LocalSecurityAudit.Services;
 
 namespace LocalSecurityAudit.Views;
 
@@ -332,7 +333,7 @@ internal sealed class TrayIcon : IDisposable
             Flags = NifMessage | NifIcon | NifTip | NifShowTip,
             CallbackMessage = TrayCallbackMessage,
             IconHandle = _iconHandle,
-            Tip = "Local Security Audit",
+            Tip = AppText.Get("Essential"),
         };
     }
 

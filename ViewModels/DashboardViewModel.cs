@@ -120,7 +120,48 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         ? AppText.Format("Audit on {0:d}", date) : AppText.Get("Latest audit");
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowPriorityFindings), nameof(PriorityPreviewLabel))]
     private List<AuditIssueEnhanced> priorityFindings = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPriorityView), nameof(ShowPriorityFindings))]
+    private bool showAllFindings;
+
+    [ObservableProperty]
+    private string findingSearchText = string.Empty;
+
+    public bool IsPriorityView => !ShowAllFindings;
+    public bool ShowPriorityFindings => IsPriorityView && PriorityFindings.Count > 0;
+    public string AllFindingsLabel => AppText.Format("All findings ({0})", FindingSections.Sum(section => section.Count));
+    public string PriorityPreviewLabel => AppText.Format("Showing {0} of {1} findings",
+        PriorityFindings.Count, FindingSections.Sum(section => section.Count));
+
+    [RelayCommand]
+    private void SetFindingsView(string? view) => ShowAllFindings = view == FilterAll;
+
+    partial void OnShowAllFindingsChanged(bool value)
+    {
+        if (value)
+            foreach (var section in FindingSections) section.IsExpanded = true;
+    }
+
+    partial void OnFindingSearchTextChanged(string value)
+    {
+        ShowAllFindings = true;
+        RebuildSections(expandMatches: true);
+    }
+
+    [ObservableProperty] private string auditHighCountText = "–";
+    [ObservableProperty] private string auditMediumCountText = "–";
+    [ObservableProperty] private string auditLowCountText = "–";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAuditPriority), nameof(AuditPriorityTitle), nameof(AuditPriorityAction))]
+    private AuditIssueEnhanced? auditPriorityFinding;
+    [ObservableProperty] private string auditSummaryEmptyTitle = "";
+    [ObservableProperty] private string auditSummaryEmptyText = "";
+    public bool HasAuditPriority => AuditPriorityFinding != null;
+    public string AuditPriorityTitle => AuditPriorityFinding?.DisplayTitle ?? "";
+    public string AuditPriorityAction => AuditPriorityFinding?.PriorityActionText ?? "";
 
     [ObservableProperty]
     private int eventCount;
@@ -195,6 +236,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private string severityFilter = FilterAll;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AllFindingsLabel), nameof(PriorityPreviewLabel))]
     private ObservableCollection<FindingSection> findingSections = new();
 
     [ObservableProperty]
@@ -248,9 +290,22 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private string SourceLabel(string log) => $"{AppText.Get(log)} {_allIssues.Count(issue => string.Equals(issue.LogName, log, StringComparison.OrdinalIgnoreCase))}";
 
     [RelayCommand]
-    private void SetSourceFilter(string? log) => SourceFilter = log is "Application" or "Security" or "Setup" or "System" or "ForwardedEvents" ? log : FilterAll;
+    private void SetSourceFilter(string? log)
+    {
+        string next = log is "Application" or "Security" or "Setup" or "System" or "ForwardedEvents" ? log : FilterAll;
+        if (SourceFilter != next) SourceFilter = next;
+        else
+        {
+            ShowAllFindings = true;
+            RebuildSections(expandMatches: true);
+        }
+    }
 
-    partial void OnSourceFilterChanged(string value) => RebuildSections();
+    partial void OnSourceFilterChanged(string value)
+    {
+        ShowAllFindings = true;
+        RebuildSections(expandMatches: true);
+    }
 
     public DashboardViewModel(
         DataStorageService storageService,
@@ -266,11 +321,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         AppText.Current.LanguageChanged += OnLanguageChanged;
     }
 
-    public bool IsAssistantMode => _storageService.IsReadOnly;
-    public bool IsExtendedMode => !IsAssistantMode;
-    public string ScopeHint => AppText.Get(IsAssistantMode
-        ? "Display only · external results refresh automatically · Security skipped by default"
-        : _schedulerService.ActiveMode == AppMode.Full
+    public string ScopeHint => AppText.Get(_schedulerService.ActiveMode == AppMode.Full
             ? "Full-access mode · all five Windows log channels · administrator approval required"
             : "Extended mode · no elevation · Security skipped · configured AI Hub analysis");
     public string EmptyFindingsTitle => AppText.Get(HasAssessment ? "No findings in this audit" : "No assessment available");
@@ -288,6 +339,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(SelectedAuditLabel));
             OnPropertyChanged(nameof(ScopeHint));
             OnPropertyChanged(nameof(FullScanRangeHint));
+            OnPropertyChanged(nameof(ReanalyzeRangeHint));
             if (_scanFailureMessage != null) ShowStatus(InfoBarSeverity.Error, AppText.Format("Scan failed: {0}", _scanFailureMessage));
         });
     }
@@ -355,7 +407,8 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsFilterHigh));
         OnPropertyChanged(nameof(IsFilterMedium));
         OnPropertyChanged(nameof(IsFilterLow));
-        RebuildSections();
+        ShowAllFindings = true;
+        RebuildSections(expandMatches: true);
     }
 
     [RelayCommand(AllowConcurrentExecutions = true)]
@@ -414,8 +467,8 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
             {
                 if (_scanFailureMessage != null)
                     ShowStatus(InfoBarSeverity.Error, AppText.Format("Scan failed: {0}", _scanFailureMessage));
-                else if (_storageService.RejectedAssistantRecords > 0)
-                    ShowStatus(InfoBarSeverity.Warning, AppText.Format("{0} assistant records failed format validation and were excluded.", _storageService.RejectedAssistantRecords));
+                else if (_storageService.RejectedLegacyRecords > 0)
+                    ShowStatus(InfoBarSeverity.Warning, AppText.Format("{0} legacy records failed format validation and were excluded.", _storageService.RejectedLegacyRecords));
                 else IsStatusVisible = false;
             }
         }
@@ -445,11 +498,11 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void SelectDay(DashboardDay? day)
     {
-        if (day == null || day.Date > DateTime.Today
-            || (day.Date < DateTime.Today.AddDays(-6) && ActivityDays?.Any(item => item.Date == day.Date) != true)) return;
+        if (day == null || day.Date > DateTime.Today) return;
         if (_selectedDate == day.Date && !IsStatusVisible) return;
         _selectedDate = day.Date;
         OnPropertyChanged(nameof(SelectedAuditLabel));
+        OnPropertyChanged(nameof(SelectedAuditDate));
         foreach (var item in RecentDays) item.IsSelected = item.Date == day.Date;
         UpdateActivitySelection();
         OnPropertyChanged(nameof(SelectedDayText));
@@ -457,11 +510,12 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(FullScanRangeHint))]
+    [NotifyPropertyChangedFor(nameof(FullScanRangeHint), nameof(ReanalyzeRangeHint))]
     private int fullScanRangeIndex;
 
     public int FullScanDays => FullScanRangeIndex switch { 1 => 2, 2 => 7, _ => 1 };
     public string FullScanRangeHint => AppText.Format("Incremental scan; model upgrades reanalyze {0} days", FullScanDays);
+    public string ReanalyzeRangeHint => AppText.Format("Reanalyze the last {0} days with the current kernel. Any earlier unscanned gap is included.", FullScanDays);
 
     [RelayCommand]
     private async Task RunFastScanAsync()
@@ -475,9 +529,12 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         await RunScanAsync(false);
     }
 
-    private async Task RunScanAsync(bool fastScan)
+    [RelayCommand]
+    private async Task ReanalyzeRangeAsync() => await RunScanAsync(false, reanalyzeRange: true);
+
+    private async Task RunScanAsync(bool fastScan, bool reanalyzeRange = false)
     {
-        if (IsAssistantMode || _isRunningScan || IsLoading || _schedulerService.IsScanning)
+        if (_isRunningScan || IsLoading || _schedulerService.IsScanning)
         {
             return;
         }
@@ -490,7 +547,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
 
         try
         {
-            bool succeeded = await _schedulerService.ExecuteAuditAsync(fastScan, fullScanDays: fullScanDays);
+            bool succeeded = await _schedulerService.ExecuteAuditAsync(fastScan, fullScanDays: fullScanDays, reanalyzeRange: reanalyzeRange);
             if (succeeded)
             {
                 await LoadDataCommand.ExecuteAsync(null);
@@ -506,6 +563,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private void ApplyNoData()
     {
         _displayedResult = null;
+        RebuildHealthAverage();
         HasAuditData = false;
         HasAssessment = false;
         _allIssues.Clear();
@@ -515,8 +573,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         HealthScoreLabel = AppText.Get("Health score");
         HealthVerdict = AppText.Get(_selectedDate == null ? "No audit yet" : "No audit on this day");
         HealthSummaryText = AppText.Get(_selectedDate == null
-            ? IsAssistantMode ? "Waiting for Claude or Codex to publish an audit. Open Settings > Mode for the workflow."
-                : "No scan results yet."
+            ? "No scan results yet."
             : "Choose another day to view a saved audit.");
         HealthDeductionText = string.Empty;
         LastAuditHeadline = _selectedDate is { } day ? AppText.Format("No audit on {0:d}", day) : AppText.Get("No audit has completed yet");
@@ -526,8 +583,13 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         EventCountText = "–";
         EventCount = 0;
         CoverageState = AppText.Get("No audit");
-        CoverageText = AppText.Get(IsAssistantMode ? "External results will appear automatically after a successful publish."
-            : "Run a scan to establish the evidence coverage.");
+        CoverageText = AppText.Get("Run a scan to establish the evidence coverage.");
+        AuditHighCountText = AuditMediumCountText = AuditLowCountText = "–";
+        AuditPriorityFinding = null;
+        AuditSummaryEmptyTitle = HealthVerdict;
+        AuditSummaryEmptyText = _selectedDate == null
+            ? AppText.Get("Run a scan to receive an evidence-based assessment and recommendations.")
+            : HealthSummaryText;
         PriorityFindings = new List<AuditIssueEnhanced>();
         TotalFindings = 0;
         HighCount = 0;
@@ -546,6 +608,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private void ApplyResult(AuditResult result)
     {
         _displayedResult = result;
+        RebuildHealthAverage();
         UpdateActivitySelection();
         HasAuditData = true;
         HasAssessment = result.HasAssessment || result.HasScopedAssessment;
@@ -563,6 +626,15 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         }
 
         var breakdown = HealthScoreCalculator.Calculate(result.Findings);
+        // The overview describes this audit, independently of the history/source filters below.
+        AuditHighCountText = breakdown.HighCount.ToString("N0", AppText.Culture);
+        AuditMediumCountText = breakdown.MediumCount.ToString("N0", AppText.Culture);
+        AuditLowCountText = breakdown.LowCount.ToString("N0", AppText.Culture);
+        AuditPriorityFinding = result.Findings.Select(IssueCategorizer.CategorizeIssue)
+            .OrderByDescending(issue => SeverityRank(issue.Severity))
+            .ThenByDescending(issue => issue.Occurrences)
+            .ThenByDescending(issue => issue.EventTimestamp)
+            .FirstOrDefault();
         HealthScore = HasAssessment ? breakdown.Score : 0;
         HealthBand = breakdown.Band;
         HealthScoreText = HasAssessment ? breakdown.Score.ToString(AppText.Culture) : "--";
@@ -579,6 +651,10 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         HealthDeductionText = HasAssessment ? BuildDeductionText(breakdown) : string.Empty;
         if (result.HasScopedAssessment)
             HealthDeductionText += " " + AppText.Get("Daily scope excludes Security. This is not an overall security assessment.");
+        AuditSummaryEmptyTitle = HasAssessment ? AppText.Get("No findings in this audit") : HealthVerdict;
+        AuditSummaryEmptyText = HasAssessment
+            ? AppText.Get("No findings were reported in the assessed scope.")
+            : AppText.Get("This audit has no complete assessment. Review its coverage details before drawing conclusions.");
 
         TotalFindings = breakdown.TotalFindings;
         HighCount = breakdown.HighCount;
@@ -616,7 +692,7 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
         RebuildSections();
     }
 
-    private void RebuildSections()
+    private void RebuildSections(bool expandMatches = false)
     {
         OnPropertyChanged(nameof(FindingsHeading));
         OnPropertyChanged(nameof(OccurrenceTimelineText));
@@ -637,6 +713,17 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
             _ => sourceIssues.ToList()
         };
 
+        var searchTerms = (FindingSearchText ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (searchTerms.Length > 0)
+        {
+            visibleIssues = visibleIssues.Where(issue => searchTerms.All(term =>
+                string.Equals(issue.EventId, term, StringComparison.OrdinalIgnoreCase)
+                || (!term.All(char.IsDigit) && (issue.Source.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || issue.LogName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || issue.DisplayTitle.Contains(term, StringComparison.OrdinalIgnoreCase)))))
+                .ToList();
+        }
+
         var groups = visibleIssues
             .GroupBy(issue => issue.CategoryLabel)
             .OrderByDescending(group => group.Max(issue => SeverityRank(issue.Severity)))
@@ -655,9 +742,9 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
                 .ThenByDescending(issue => issue.EventTimestamp == default ? issue.DetectedAt : issue.EventTimestamp)
                 .ToList();
 
-            bool expanded = previousState.TryGetValue(group.Key, out bool wasExpanded)
+            bool expanded = expandMatches || (previousState.TryGetValue(group.Key, out bool wasExpanded)
                 ? wasExpanded
-                : filterActive;
+                : ShowAllFindings);
             sections.Add(new FindingSection(group.Key, issues, expanded));
         }
 

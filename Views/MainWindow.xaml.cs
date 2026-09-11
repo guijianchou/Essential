@@ -9,7 +9,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Media.Imaging;
 using LocalSecurityAudit.Helpers;
+using LocalSecurityAudit.Models;
 using LocalSecurityAudit.Services;
 using LocalSecurityAudit.ViewModels;
 using Windows.Graphics;
@@ -31,7 +33,6 @@ public sealed partial class MainWindow : Window
     private bool _isClosed;
     private bool _isHiddenToTray;
     private bool _isClosing;
-    private bool _isPaneToggling;
     private readonly UISettings _uiSettings = new();
     private readonly Dictionary<FrameworkElement, Action> _releaseStepBindings = new();
 
@@ -46,6 +47,14 @@ public sealed partial class MainWindow : Window
         _settingsService = settingsService;
         _schedulerService = schedulerService;
         InitializeComponent();
+        foreach (var task in HubTaskCatalog.Tasks)
+            AppNavigation.MenuItems.Add(new NavigationViewItem
+            {
+                Tag = task.Id,
+                Content = AppText.Get(task.Title),
+                VerticalAlignment = VerticalAlignment.Top,
+                Icon = new FontIcon { Glyph = task.Glyph, FontSize = 16 }
+            });
         Root.DataContext = ViewModel;
         ViewModel.PropertyChanged += OnWorkflowPropertyChanged;
 
@@ -62,14 +71,14 @@ public sealed partial class MainWindow : Window
         _schedulerService.AuditCompleted += OnAuditCompleted;
         _schedulerService.AuditFailed += OnAuditFailed;
         Root.ActualThemeChanged += OnActualThemeChanged;
+        _uiSettings.ColorValuesChanged += OnSystemColorsChanged;
         ApplyTheme(_settingsService.Current.Theme);
         ApplyLanguage();
         NavigateToStartupPage();
     }
 
     /// <summary>
-    /// Opens the page named by a "--page=trends" style argument. Used by tooling and
-    /// shortcuts; the dashboard remains the default.
+    /// Opens a requested page; old overview/trends shortcuts resolve to security audit.
     /// </summary>
     private void NavigateToStartupPage()
     {
@@ -80,17 +89,6 @@ public sealed partial class MainWindow : Window
 
         switch (page)
         {
-            case "trends":
-                if (FindMenuItem("trends") is { } trendsItem)
-                {
-                    NavigateIfNeeded(typeof(TrendsPage), trendsItem);
-                }
-                else
-                {
-                    ContentFrame.Navigate(typeof(TrendsPage));
-                }
-
-                break;
             case "settings":
                 if (AppNavigation.SettingsItem is NavigationViewItem settingsItem)
                 {
@@ -103,7 +101,7 @@ public sealed partial class MainWindow : Window
 
                 break;
             default:
-                ContentFrame.Navigate(typeof(DashboardPage));
+                NavigateIfNeeded(typeof(DashboardPage), FindMenuItem(HubTaskCatalog.SecurityAuditId)!);
                 break;
         }
     }
@@ -118,61 +116,28 @@ public sealed partial class MainWindow : Window
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         ApplyInitialBounds();
+        UpdateWorkflowHeight(AppNavigation.ActualHeight);
         ApplyTitleBarTheme(Root.ActualTheme);
+        ApplyLogoTheme(Root.ActualTheme);
         ApplyLanguage();
         UpdateWorkflowPresentation();
         InitializeTrayIcon();
     }
 
     private void OnNavigationSizeChanged(object sender, SizeChangedEventArgs e)
+        => UpdateWorkflowHeight(e.NewSize.Height);
+
+    private void UpdateWorkflowHeight(double navigationHeight)
     {
-        // The workflow lives in the menu area; give it the available middle space so
-        // navigation and the footer command remain visible while the content stays centered.
-        if (WorkflowHost != null) WorkflowHost.Height = Math.Clamp(e.NewSize.Height - 224, 360, 560);
-        if (StepDetailsScroll != null) StepDetailsScroll.MaxHeight = Math.Clamp(e.NewSize.Height - 576, 32, 128);
+        // Never bind the viewport limit to its own ancestor's ActualHeight: a hidden
+        // workflow can retain a zero-height viewport when it becomes visible.
+        double availableHeight = Math.Max(0, navigationHeight - 312);
+        if (WorkflowHost != null) WorkflowHost.MaxHeight = availableHeight;
+        if (WorkflowScroll != null) WorkflowScroll.MaxHeight = availableHeight;
+        if (StepDetailsScroll != null) StepDetailsScroll.MaxHeight = Math.Clamp(availableHeight - 330, 48, 128);
     }
 
-    private void OnPaneOpening(NavigationView sender, object args)
-    {
-        if (WorkflowHost != null) FadePaneLabels(0, 1, 180);
-    }
-
-    private void FadePaneLabels(float from, float to, int milliseconds)
-    {
-        bool motion = _uiSettings.AnimationsEnabled;
-        var labels = _releaseStepBindings.Keys.Select(element => element.FindName("StepText"))
-            .OfType<FrameworkElement>().Append(WorkflowHeading).Append(WorkflowSummary);
-        foreach (var label in labels)
-        {
-            var visual = ElementCompositionPreview.GetElementVisual(label);
-            visual.StopAnimation("Opacity");
-            visual.Opacity = to;
-            if (!motion) continue;
-            var fade = visual.Compositor.CreateScalarKeyFrameAnimation();
-            fade.InsertKeyFrame(0, from);
-            fade.InsertKeyFrame(1, to);
-            fade.Duration = TimeSpan.FromMilliseconds(milliseconds);
-            visual.StartAnimation("Opacity", fade);
-        }
-    }
-
-    private async Task TogglePaneAsync()
-    {
-        if (_isPaneToggling) return;
-        _isPaneToggling = true;
-        try
-        {
-            if (ViewModel.IsPaneOpen && _uiSettings.AnimationsEnabled)
-            {
-                FadePaneLabels(1, 0, 120);
-                await Task.Delay(120);
-            }
-            if (!_isClosed) ViewModel.IsPaneOpen = !ViewModel.IsPaneOpen;
-        }
-        finally { _isPaneToggling = false; }
-    }
-
-    private async void OnPaneToggleClick(object sender, RoutedEventArgs e) => await TogglePaneAsync();
+    private void OnExpandPaneClick(object sender, RoutedEventArgs e) => ViewModel.IsPaneOpen = true;
 
     private void OnWorkflowStepClick(object sender, ItemClickEventArgs e)
     {
@@ -182,7 +147,13 @@ public sealed partial class MainWindow : Window
 
     private void OnWorkflowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.SelectedStep)) StepDetailsScroll.ChangeView(0, 0, null, true);
+        if (e.PropertyName == nameof(MainViewModel.IsPaneOpen))
+            WorkflowHost.Padding = ViewModel.IsPaneOpen ? new Thickness(8, 0, 8, 0) : new Thickness(0);
+        if (e.PropertyName == nameof(MainViewModel.SelectedStep))
+        {
+            StepDetailsScroll.ChangeView(0, 0, null, true);
+            WorkflowScroll.ChangeView(0, 0, null, true);
+        }
         if (e.PropertyName is nameof(MainViewModel.WorkflowTitle) or nameof(MainViewModel.SelectedStep)
             or nameof(MainViewModel.WorkflowPercent)) UpdateWorkflowPresentation();
     }
@@ -190,7 +161,7 @@ public sealed partial class MainWindow : Window
     private void UpdateWorkflowPresentation()
     {
         string? key = ViewModel.IsWorkflowFailed ? "HealthRiskBrush" : ViewModel.IsTranslationPending ? "SeverityMediumTextBrush"
-            : !ViewModel.Steps.Any(step => step.IsActive) && ViewModel.HasSavedResult ? "HealthGoodBrush" : null;
+            : ViewModel.IsWorkflowComplete || !ViewModel.Steps.Any(step => step.IsActive) && ViewModel.HasSavedResult ? "HealthGoodBrush" : null;
         if (key != null) WorkflowProgress.Foreground = ThemeResources.GetBrush(Root, key);
         else WorkflowProgress.ClearValue(Control.ForegroundProperty);
         WorkflowStatusIcon.Foreground = WorkflowProgress.Foreground;
@@ -289,14 +260,8 @@ public sealed partial class MainWindow : Window
 
         switch (item.Tag?.ToString())
         {
-            case "pane":
-                _ = TogglePaneAsync();
-                break;
-            case "dashboard":
+            case HubTaskCatalog.SecurityAuditId:
                 NavigateIfNeeded(typeof(DashboardPage), item);
-                break;
-            case "trends":
-                NavigateIfNeeded(typeof(TrendsPage), item);
                 break;
         }
     }
@@ -320,6 +285,7 @@ public sealed partial class MainWindow : Window
     private void OnActualThemeChanged(FrameworkElement sender, object args)
     {
         ApplyTitleBarTheme(Root.ActualTheme);
+        ApplyLogoTheme(Root.ActualTheme);
         UpdateWorkflowPresentation();
     }
 
@@ -327,10 +293,9 @@ public sealed partial class MainWindow : Window
     {
         AppWindow.Title = ViewModel.WindowTitle;
         Root.Language = AppText.Culture.Name;
-        if (FindMenuItem("dashboard") is { } dashboardItem)
-            dashboardItem.Content = AppText.Get("Dashboard");
-        if (FindMenuItem("trends") is { } trendsItem)
-            trendsItem.Content = AppText.Get("Trends");
+        foreach (var task in HubTaskCatalog.Tasks)
+            if (FindMenuItem(task.Id) is { } item)
+                item.Content = AppText.Get(task.Title);
         if (AppNavigation.SettingsItem is NavigationViewItem settingsItem)
         {
             settingsItem.Content = AppText.Get("Settings");
@@ -369,7 +334,7 @@ public sealed partial class MainWindow : Window
                 }
 
                 _trayIcon.ShowNotification(
-                    AppText.Get("Local Security Audit"),
+                    AppText.Get("Essential"),
                     message,
                     isError: hasHighSeverityIssue);
             }
@@ -412,14 +377,30 @@ public sealed partial class MainWindow : Window
 
     private void ApplyTheme(string theme)
     {
+        var systemBackground = _uiSettings.GetColorValue(UIColorType.Background);
         Root.RequestedTheme = theme switch
         {
             "dark" => ElementTheme.Dark,
             "light" => ElementTheme.Light,
-            _ => ElementTheme.Default
+            _ => systemBackground.R + systemBackground.G + systemBackground.B < 384 ? ElementTheme.Dark : ElementTheme.Light
         };
 
+        ApplyLogoTheme(Root.ActualTheme);
         ApplyTitleBarTheme(Root.ActualTheme);
+    }
+
+    private void OnSystemColorsChanged(UISettings sender, object args)
+    {
+        if (!_isClosed && _settingsService.Current.Theme == "system")
+            DispatcherQueue.TryEnqueue(() => { if (!_isClosed) ApplyTheme("system"); });
+    }
+
+    private void ApplyLogoTheme(ElementTheme theme)
+    {
+        bool dark = theme == ElementTheme.Dark
+            || (theme == ElementTheme.Default && Application.Current.RequestedTheme == ApplicationTheme.Dark);
+        string suffix = dark ? "dark" : "light";
+        TitleBarLogo.Source = new BitmapImage(new Uri($"ms-appx:///Assets/logo-{suffix}-32.png"));
     }
 
     private void ApplyTitleBarTheme(ElementTheme theme)
@@ -465,6 +446,7 @@ public sealed partial class MainWindow : Window
         _schedulerService.AuditCompleted -= OnAuditCompleted;
         _schedulerService.AuditFailed -= OnAuditFailed;
         Root.ActualThemeChanged -= OnActualThemeChanged;
+        _uiSettings.ColorValuesChanged -= OnSystemColorsChanged;
         AppWindow.Closing -= OnAppWindowClosing;
         DisposeTrayIcon();
     }
