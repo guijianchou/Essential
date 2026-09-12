@@ -42,6 +42,11 @@ public partial class App : Application
                 services.AddHostedService(serviceProvider =>
                     serviceProvider.GetRequiredService<AuditSchedulerService>());
 
+                // W3: Optimization services
+                services.AddSingleton<RecycleBinHelper>();
+                services.AddSingleton<CacheCleanupService>();
+                services.AddSingleton<DownloadOrganizerService>();
+
                 // Register Views
                 services.AddTransient<MainWindow>();
             })
