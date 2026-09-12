@@ -47,6 +47,9 @@ public partial class App : Application
                 services.AddSingleton<CacheCleanupService>();
                 services.AddSingleton<DownloadOrganizerService>();
 
+                // W4: Task AI client
+                services.AddSingleton<TaskAiClient>();
+
                 // Register Views
                 services.AddTransient<MainWindow>();
             })

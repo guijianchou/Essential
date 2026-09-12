@@ -152,6 +152,38 @@ public sealed class SettingsService
         {"issues":[{"key":"failed_logon_burst","eventRef":"event-4","eventId":"4625","eventTimestamp":"2026-01-01T00:00:00Z","title":"Six failed logons for jdoe within two minutes","description":"Six 4625 events for jdoe from 192.168.1.20 failed with a bad password between 00:00 and 00:02 and no successful logon followed.","severity":"Medium","confidence":"High","category":"Login","affected":"jdoe from 192.168.1.20","rootCause":"Most likely a mistyped or expired password, although a password-guessing attempt cannot be excluded.","recommendation":"Confirm with the user, check that 192.168.1.20 is a known device, and review later 4624 events for the same account.","occurrences":6,"relatedEventRefs":["event-4","event-5","event-6","event-7","event-8","event-9"],"titleZh":"两分钟内发生六次 jdoe 登录失败","descriptionZh":"jdoe 从 192.168.1.20 发起的六次 4625 登录在 00:00 至 00:02 因密码错误失败，之后未出现成功登录。","rootCauseZh":"可能是密码输入错误或已过期，也不能排除密码猜测。","recommendationZh":"与用户确认，核对 192.168.1.20 是否为已知设备，并检查同一账号后续的 4624 事件。"}]}
         """;
 
+    /// <summary>
+    /// The system-optimization policy template. Written to chains/system-optimization/AGENTS.md on first use.
+    /// </summary>
+    public const string DefaultSystemOptimizationInstructions = """
+        # System Optimization policy
+
+        Analyze the Windows system state and return actionable optimization recommendations.
+        Treat this document as policy and context only. Do not execute commands or change files.
+        Base recommendations on concrete system metrics, installed software, and configuration data.
+
+        ## Analysis scope
+
+        - Startup programs and services
+        - Disk space usage and cleanup opportunities
+        - System performance metrics
+        - Installed applications and update status
+        - Power and thermal management
+        - Network configuration
+
+        ## Recommendation guidelines
+
+        - Prioritize safe, reversible changes
+        - Explain trade-offs clearly
+        - Provide specific steps for each action
+        - Estimate impact (space savings, performance gain)
+        - Flag destructive operations clearly
+
+        ## Output format
+
+        Return recommendations as structured data that the dashboard can parse and present.
+        """;
+
     private const string PreviousEnglishSecurityAuditInstructions = """
         # Local Security Audit policy
 
@@ -322,6 +354,7 @@ public sealed class SettingsService
     private readonly string _settingsPath;
     private readonly string _securityAuditInstructionsPath;
     private readonly string _legacyAgentInstructionsPath;
+    private readonly string _systemOptimizationInstructionsPath;
     private readonly bool _policyUpgraded;
 
     public AppSettings Current { get; private set; }
@@ -337,6 +370,7 @@ public sealed class SettingsService
         return taskId switch
         {
             HubTaskCatalog.SecurityAuditId => Current.SecurityAuditInstructions,
+            HubTaskCatalog.OptimizationId => LoadTaskInstructionsFromFile(taskId, DefaultSystemOptimizationInstructions),
             _ => throw new ArgumentException("No instructions are configured for this Hub task.", nameof(taskId))
         };
     }
@@ -347,8 +381,51 @@ public sealed class SettingsService
         return taskId switch
         {
             HubTaskCatalog.SecurityAuditId => _securityAuditInstructionsPath,
+            HubTaskCatalog.OptimizationId => _systemOptimizationInstructionsPath,
             _ => throw new ArgumentException("No instruction file is configured for this Hub task.", nameof(taskId))
         };
+    }
+
+    public void SaveTaskInstructions(string taskId, string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new ArgumentException("Instructions content cannot be empty.", nameof(content));
+        }
+
+        var path = GetTaskInstructionsPath(taskId);
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+
+            if (taskId == HubTaskCatalog.SecurityAuditId)
+            {
+                Current.SecurityAuditInstructions = content;
+                Save(Current);
+            }
+        }
+        catch (IOException ex)
+        {
+            throw new InvalidOperationException($"Failed to save task instructions to {path}", ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new InvalidOperationException($"Access denied when saving task instructions to {path}", ex);
+        }
+    }
+
+    public void RestoreDefaultTaskInstructions(string taskId)
+    {
+        var defaultContent = taskId switch
+        {
+            HubTaskCatalog.SecurityAuditId => DefaultSecurityAuditInstructions,
+            HubTaskCatalog.OptimizationId => DefaultSystemOptimizationInstructions,
+            _ => throw new ArgumentException("Unknown task ID.", nameof(taskId))
+        };
+
+        SaveTaskInstructions(taskId, defaultContent);
     }
 
     public event EventHandler? SettingsChanged;
@@ -362,6 +439,7 @@ public sealed class SettingsService
         Directory.CreateDirectory(appDataPath);
         _settingsPath = Path.Combine(appDataPath, "settings.json");
         _securityAuditInstructionsPath = Path.Combine(appDataPath, "chains", HubTaskCatalog.SecurityAuditId, "AGENTS.md");
+        _systemOptimizationInstructionsPath = Path.Combine(appDataPath, "chains", HubTaskCatalog.OptimizationId, "AGENTS.md");
         _legacyAgentInstructionsPath = Path.Combine(appDataPath, "AGENTS.md");
         Current = LoadSettings();
         ActiveMode = AppMode.Normalize(startupMode ?? Current.Mode);
@@ -421,6 +499,50 @@ public sealed class SettingsService
     {
         var lines = text.Replace("\r\n", "\n").Split('\n').Select(line => line.TrimEnd());
         return string.Join("\n", lines).Trim();
+    }
+
+    private string LoadTaskInstructionsFromFile(string taskId, string defaultContent)
+    {
+        var path = GetTaskInstructionsPath(taskId);
+
+        if (File.Exists(path))
+        {
+            try
+            {
+                string instructions = File.ReadAllText(path);
+                if (!string.IsNullOrWhiteSpace(instructions))
+                {
+                    return instructions;
+                }
+            }
+            catch (IOException)
+            {
+                // Fall through to default content when file is unavailable
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Fall through to default content when file is unavailable
+            }
+        }
+        else
+        {
+            // Create the file with default content on first access
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, defaultContent);
+            }
+            catch (IOException)
+            {
+                // Return default content even if file creation fails
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Return default content even if file creation fails
+            }
+        }
+
+        return defaultContent;
     }
 
     private void PersistNormalizedSettingsIfNeeded()
