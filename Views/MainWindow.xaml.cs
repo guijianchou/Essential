@@ -101,7 +101,7 @@ public sealed partial class MainWindow : Window
 
                 break;
             default:
-                NavigateIfNeeded(typeof(DashboardPage), FindMenuItem(HubTaskCatalog.SecurityAuditId)!);
+                NavigateTask(HubTaskCatalog.SecurityAuditId);
                 break;
         }
     }
@@ -258,11 +258,9 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        switch (item.Tag?.ToString())
+        if (HubTaskCatalog.TryGet(item.Tag?.ToString(), out var task))
         {
-            case HubTaskCatalog.SecurityAuditId:
-                NavigateIfNeeded(typeof(DashboardPage), item);
-                break;
+            NavigateIfNeeded(task.PageType, item);
         }
     }
 
@@ -603,6 +601,15 @@ public sealed partial class MainWindow : Window
         if (ContentFrame.CurrentSourcePageType != pageType)
         {
             ContentFrame.Navigate(pageType);
+        }
+    }
+
+    private void NavigateTask(string taskId)
+    {
+        if (HubTaskCatalog.TryGet(taskId, out var task)
+            && FindMenuItem(task.Id) is { } item)
+        {
+            NavigateIfNeeded(task.PageType, item);
         }
     }
 }

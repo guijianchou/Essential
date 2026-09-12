@@ -28,6 +28,7 @@ public partial class App : Application
                 services.AddTransient<MainViewModel>();
                 services.AddSingleton<DashboardViewModel>();
                 services.AddSingleton<TrendsViewModel>();
+                services.AddSingleton<OptimizationViewModel>();
                 services.AddSingleton<SettingsViewModel>();
 
                 // Register Services

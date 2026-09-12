@@ -116,8 +116,10 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     private List<DashboardDay> recentDays = new();
     [ObservableProperty] private bool isDateLoading;
     public string SelectedDayText => (_selectedDate ?? _displayedResult?.Timestamp.ToLocalTime().Date)?.ToString("yyyy-MM-dd ddd", AppText.Culture) ?? string.Empty;
+    public DateTimeOffset? SelectedAuditDate => _selectedDate?.ToUniversalTime();
     public string SelectedAuditLabel => _selectedDate is { } date
         ? AppText.Format("Audit on {0:d}", date) : AppText.Get("Latest audit");
+    public DateTimeOffset LatestSelectableAuditDate => DateTimeOffset.Now;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowPriorityFindings), nameof(PriorityPreviewLabel))]
@@ -198,6 +200,15 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string healthDeductionText = string.Empty;
+
+    [ObservableProperty]
+    private string healthAverageHint = string.Empty;
+
+    [ObservableProperty]
+    private string healthAverageLabel = AppText.Get("Average health");
+
+    [ObservableProperty]
+    private string healthAverageText = "–";
 
     [ObservableProperty]
     private string lastAuditHeadline = AppText.Get("No audit has completed yet");
@@ -512,7 +523,6 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(FullScanRangeHint), nameof(ReanalyzeRangeHint))]
     private int fullScanRangeIndex;
-
     public int FullScanDays => FullScanRangeIndex switch { 1 => 2, 2 => 7, _ => 1 };
     public string FullScanRangeHint => AppText.Format("Incremental scan; model upgrades reanalyze {0} days", FullScanDays);
     public string ReanalyzeRangeHint => AppText.Format("Reanalyze the last {0} days with the current kernel. Any earlier unscanned gap is included.", FullScanDays);
@@ -558,6 +568,13 @@ public partial class DashboardViewModel : ObservableObject, IDisposable
             _isRunningScan = false;
             UpdateLoadingState();
         }
+    }
+
+    private void RebuildHealthAverage()
+    {
+        // Health average is calculated in RebuildActivity from activity data
+        // This method exists to refresh labels when language changes or data reloads
+        HealthAverageHint = string.Empty;
     }
 
     private void ApplyNoData()
