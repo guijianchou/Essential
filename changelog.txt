@@ -1,0 +1,208 @@
+# Essential (Toolbox) - Changelog / 项目修改记录
+
+================================================================================
+PART 1: ENGLISH CHANGELOG & RELEASE NOTES
+================================================================================
+
+## Version 0.4.3 (2026-09-10)
+- Issue Overview Enhancement: Added "Priority view / All findings" switch; top 5 priority findings clearly display their proportion relative to the total; All findings view automatically expands categories to avoid findings being hidden in collapsed groups.
+- Filter Interaction: Selecting a log source or severity automatically transitions to the All findings view and expands matching categories. Clicking the active source re-expands without resetting manual collapse states.
+- Search Capabilities: Added search across Event ID, provider name, and localized titles. Purely numeric queries perform exact Event ID matching, with accurate match counts and search hints.
+- Regression & Verification: WindowsUpdateClient 20 / Volsnap 36 synthetic regressions passed across XAML binding, search, bilingual strings, and theme switches; 19 historical reads and 54 analysis regressions passed.
+
+## Version 0.4.2 (2026-09-10)
+- Health Overview: Simplified health summary card to show High / Medium / Low counts alongside top recommended actions with direct detail navigation. Historical filters no longer distort current audit summaries.
+- Layout & Token: Sidebar removed redundant titlebar padding, keeping navigation entries at the top. Collapsed sidebar token display uses line icons and flyouts without expanding pane.
+- Build & Artifacts: Standardized build outputs to artifacts/bin, artifacts/obj, and artifacts/publish (x64 default). Consolidated documentation into docs.
+
+## Version 0.4.1 (2026-09-10)
+- Kernel Management: "Download or update" compares local CLI semantic versions against official releases, skipping downloads when local is identical or newer. Data directory kernels take precedence over application directory copies.
+- Pi CLI Concurrency Fix: Resolved brief process file locking upon Pi exit with up to 3.1s bounded retries.
+- Zero-Event Handling: Zero-event scans explicitly report "No AI analysis conducted" and record reason. Added "Reanalyze selected range" context menu to re-evaluate 1d/2d/1w with the current kernel.
+- Kernel Cache Isolation: Analysis caches separated per kernel; explicit reanalysis purges cache.
+
+## Version 0.4.0 (2026-09-10)
+- Rebranding: Application renamed to "Essential" (Chinese: 工具箱). Executables and release outputs updated accordingly; preserved data directory, settings, kernels, and history.
+- Navigation Consolidation: Overview and Trends consolidated into "Security Audit" with a clean health status card.
+- Hub Task Architecture: Settings "Security Audit" transformed into "Hub", binding sidebar entries to individual AGENTS.md rule cards under chains/{taskId}/AGENTS.md.
+
+## Version 0.3.11 (2026-09-10)
+- Token Tracking: Persistent Token totals in sidebar. SQLite records kernel-reported in/out tokens in TokenUsage table, deduplicated per request.
+- Appearance Settings: Added configurable token display periods (local calendar Day, Monday-aligned Week, or Month).
+- Codex Responses Protocol: Addressed Codex 0.153.4 internal Responses-Lite gateway incompatibility via model_catalog_json, disabling internal Lite while maintaining streaming and AGENTS.md.
+
+## Version 0.3.10 (2026-09-09)
+- Sidebar Viewport: Fixed zero-height scrolling bug when pane toggled.
+- Task Strategy Migration: Security audit AGENTS.md migrated to chains/security-audit/AGENTS.md. Codex reads AGENTS.md from isolated ephemeral working directories.
+
+## Version 0.3.9 (2026-09-09)
+- Process-based AI Kernels: Replaced direct HTTP AI calls with isolated Codex / Pi CLI processes. Removed legacy assistant mode.
+- Connection Testing: Connection tests exercise live kernels with minimal payloads and display real-time token counts.
+
+## Version 0.3.8 (2026-09-09)
+- Theme Assets: Removed legacy unthemed logos; introduced light/dark adaptive assets.
+- Build Isolation: Debug and Release builds separated into versioned directories.
+
+## Version 0.3.7 (2026-09-08)
+- Workflow Reordering: Centered scan progress and status in sidebar with independent scrolling.
+- Analysis Depth: Tuned AI prompt depth by severity (High: chronological evidence chain & verification; Medium: pattern & alternative checks; Low: concise routine check).
+
+## Version 0.3.6 (2026-09-08)
+- Responses API: Standardized instructions/input, reasoning effort, and max_output_tokens.
+- SSE Streaming Completion: Enforced strict requirement for response.completed before accepting results.
+
+## Version 0.3.5 (2026-09-08)
+- Data Isolation: User configurations, diagnostic logs, and databases isolated to LocalAppData.
+- Standalone Release: First self-contained x64 distribution package.
+
+## Version 0.3.4 (2026-09-07)
+- Dual Modes: Extended mode (standard user, skips Security) and Full-access mode (same-user UAC elevation, covers 5 channels).
+- Health Score UI: Integrated compact health overview, 7-day selector, and source filtering.
+
+## Version 0.3.3 ~ 0.2.0 (2026-09-03 ~ 2026-09-07)
+- Model tiers: Support for GPT-5.6 Luna / Terra / Sol and GPT-6 Astra.
+- Multi-channel log ingestion: Application, System, Setup, ForwardedEvents, and Security.
+- WinUI 3 modernization: MicaAlt backdrop, Segoe UI Variable typography, bilingual English/Chinese localization.
+
+
+================================================================================
+PART 2: CHINESE CHANGELOG / 中文修改记录
+================================================================================
+
+## 0.4.3 / 2026-09-10
+- 问题总览增加“优先查看／全部问题”切换，前五条明确标注占总数的比例；完整列表展开分类，避免已保存的 System 问题藏在默认折叠区。两种视图分别展示，避免重复卡片。
+- 选择日志来源或严重度时自动进入完整列表并展开匹配分类；再次点击当前来源也会重新展开，保留正常刷新时的手动折叠选择。
+- 支持按事件 ID、提供程序和当前语言标题组合搜索，纯数字精确匹配事件 ID；无匹配时显示准确条数和搜索提示。证据摘要优先显示事件 ID，便于对照事件查看器。
+- 合成 WindowsUpdateClient 20 / Volsnap 36 回归覆盖前五条之外的结果、真实 XAML 展开与搜索绑定、中英文和主题切换；19 项历史读取及 54 项分析回归通过。
+
+## 0.4.2 / 2026-09-10
+- 健康概览移除曲线，显示所选审计的 High / Medium / Low 数量与首要处理建议，可直接打开对应详情；历史来源和严重度筛选不改变本次审计摘要。
+- 审计日期与历史统计周期分别放在各自区域；日常及全量平均分继续分开计算，缺少有效评估时不显示分数。
+- 侧栏关闭重复的标题栏自动留白，导航入口保持顶部；收起后的 Token 使用线条图标和用量浮层，无需展开侧栏。
+- 构建输出统一到 artifacts/bin、artifacts/obj 和 artifacts/publish，默认平台为 x64。Debug / Release 复用固定输出目录，仅发布包按版本命名；项目文档集中到 docs，启动脚本和回归入口同步更新。
+- Debug / Release 构建、真实 WinUI 合成布局、19 项历史、13 项 Token 与 15 项策略回归通过；500 个发布文件及 ZIP 逐项 SHA-256 校验通过。旧发布包归档，内容与 ZIP 不同的 0.3.10 解压目录单独保留。
+
+## 0.4.1 / 2026-09-10
+- “下载或更新”先比较实际 CLI 与官方 release 的语义版本，同版和本地更高版本不下载；已安装内核在远程检查失败时不会被随附旧版本替换。用户数据目录的更新版本优先于程序目录旧副本。
+- 修复 Pi 版本进程退出后短暂目录占用导致的安装失败：目录替换最多重试 3.1 秒，失败恢复旧安装。版本验证并行读取 stdout/stderr，使用隔离配置，并持久保存经验证的 CLI 版本。
+- 无事件扫描明确显示“未进行 AI 分析”和跳过原因；扫描选项新增“重新分析所选范围”，使用当前内核重新处理 1d / 2d / 1w，同时保留更早的未扫描缺口。Quick / Full 默认增量规则保持不变。
+- 分析缓存按内核区分，显式重新分析清空缓存；扫描诊断与结果记录请求内核，便于区分无事件、筛选跳过与真实调用错误。
+- 内核更新 15 项、传输 14 项、分析与工作流 54 项、增量 7 项回归通过；已安装 Pi 0.85.1 使用隔离配置通过本机 Responses / Chat Completions、长规则加载与 Token 回传验证。真实 WinUI 合成界面、Debug / Release 构建及 500 个发布文件的 ZIP 校验通过。
+
+## 0.4.0 / 2026-09-10
+- 应用更名 Essential（中文：工具箱），程序文件与版本输出目录同步改名；沿用原用户数据目录、配置、内核、历史和单实例身份。
+- 左侧概览与趋势合并为“安全审计”，Health 区使用一张无坐标的平滑曲线，集中展示单次评分、审计次数、累计问题、活跃天数与对应范围均分；保留日期选择、筛选及操作建议。
+- 健康曲线按审计完成的本地自然日计算，日常范围与全量独立汇总，缺少有效评估时留空；全部历史统计不截断，曲线最多显示最近 365 天。
+- 设置中的“安全审计”改为 Hub，以任务规则卡绑定左侧入口及其 AGENTS.md。当前实现安全审计一项，通过 Codex / Pi 加载审计规则完成分析总结和建议；未知任务标识拒绝套用审计策略。
+- Debug、Release 自包含发布、真实 WinUI 合成界面、历史与评分、策略迁移、Token 自然周期、内核传输和单实例回归通过；500 个发布文件及 ZIP 逐项 SHA-256 校验通过。
+
+## 0.3.11 / 2026-09-10
+- 侧栏增加始终可见的 Token 总计；SQLite 按请求保存内核实际返回的输入、输出用量，重复或乱序的进度快照不会重复累计。扫描、连接测试及历史补译共用统计，估算不入库。
+- “设置 → 外观 → Token 统计显示”选择本地自然日、周一开始的自然周或自然月，默认今天。侧栏同时显示全部累计和所选周期，重启保留数据及选择，跨日自动刷新。
+- 侧栏使用顶部原生折叠按钮，导航靠上、设置固定底部；收起后保留导航、工作状态和 Token 图标。当前状态详情放在阶段列表之前，小窗口可直接看到错误并滚动查看阶段。
+- 定位 Codex 0.153.4 的内部 Responses-Lite 与公开 Responses 转发接口的兼容问题：本机请求已包含 all_turns，日志无上下文长度错误。通过内核支持的 model_catalog_json 保留内置模型信息，仅关闭 use_responses_lite；继续使用 Codex 标准 AGENTS.md、Responses 流及重试链路。
+- 真实 Codex / Pi 对合成本机接口、WinUI 窗口、统计边界与持久化回归通过。远端提供商未在开发测试中调用；旧版本目录和 ZIP 保留。
+
+## 0.3.10 / 2026-09-09
+- 修复侧栏滚动视口依赖宿主 ActualHeight 导致高度为 0、进度与错误整片不可见的问题；视口按导航栏可用高度更新，保留小窗口滚动与收起展开。
+- 安全审计 AGENTS.md 迁入 `chains\security-audit\AGENTS.md`，设置增加独立“安全审计”页；无损迁移旧自定义策略，保留原通用文件，AI 连接重置不再重置审计规则。
+- Codex 从每次请求隔离工作目录的 AGENTS.md 加载审计策略，标准 Responses 流与重试交由内核处理。即时显示脱敏后的内核处理、重连和错误状态；不接受缺少完成事件的响应。
+- 按实际 UTF-8 字节数设置 Codex 策略读取上限；Pi 显式加载同一策略文件，避免 Windows 命令行长度限制截断较长的中文规则和输出契约。
+- 增加真实 WinUI 布局回归、合成策略迁移测试，以及真实 Codex / Pi 对本机模拟接口的策略加载、提前断流恢复与持续断流失败测试。发布使用独立版本目录，保留旧包。
+
+## 0.3.9 / 2026-09-09
+- AI 分析统一通过 Codex / Pi 进程内核，移除直接 HTTP 调用、辅助运行模式及历史优化入口；旧辅助结果保留只读兼容。发布包排除已退役的辅助工具。
+- 连接测试使用当前选择的内核和未保存的入口值，验证真实内核响应；侧栏显示测试/扫描阶段、成功失败及真实 token 用量，尚未返回用量时显示估算；设置反馈固定在顶部。
+- 修复内核文本被当作 HTTP 响应重复解析的问题；严格处理完成/失败事件和取消，记录备用、空结果与缓存的实际模型等级，保护高等级分析文本及严重度。
+- Pi 安装保留官方包内的主题与运行资源，检测不完整安装；SHA-256 校验后替换完整目录，失败保留旧内核。修正 Pi 密钥的环境变量引用与认证头；退出时取消并等待连接测试清理。
+- Audit policy 默认折叠；标题栏和关于页 logo 随系统及手动主题切换。Debug / Release / publish 使用 0.3.9 版本目录。
+
+## 0.3.8 / 2026-09-09
+- 删除 Assets 中旧的无主题 logo 文件，发布资源统一使用 light/dark 命名的 logo。
+- Debug 和 Release 输出按 `LocalSecurityAudit-0.3.8` 版本目录隔离，避免不同版本混用；脚本和文档同步到新路径。
+
+## 0.3.7 / 2026-09-08
+- 重排左侧工作流：扫描状态和进度在概览、趋势之后居中显示，长详情独立滚动，不再遮挡趋势；底部收起操作保留为纯图标。
+- 批次进度改用 `steps / 步`，并保持中英文随系统语言切换。
+- 按严重程度调整 AI 分析深度：高风险补充证据链、溯源和处置验证，中风险给出模式解释与核对路径，低风险保持简洁。
+
+## 0.3.6 / 2026-09-08
+- Responses 请求采用独立 instructions/input、标准 reasoning/max_output_tokens/stream 字段及 store:false；兼容根地址、/v1 和带前缀的 Base URL，避免重复 /v1 或丢失路径。
+- SSE 必须收到 response.completed 后才能成功；不再因 output_text.done、完整 JSON 片段或提前 EOF 关闭并接受结果。按最终 response.output 读取全部 assistant/output_text，忽略 reasoning，不把拒绝、不完整或取消当作无问题。
+- 记录安全格式的 x-request-id、白名单错误码和本地取消/总超时状态；不输出上游错误全文或原始日志。保留 TLS 校验、既有超时和有界重试策略，不擅自改模型、推理强度或配置。
+- 使用标准 Responses 对象和合成 SSE 增加协议回归，覆盖延迟完成、文本结束后失败、断流、分片 UTF-8、拒绝、错误脱敏及 Base URL；0.3.6 x64 自包含包独立发布，保留 0.3.5。
+
+## 0.3.5 / 2026-09-08
+- 用户配置、可编辑分析策略、诊断日志和结果库继续保存在 LocalAppData 数据目录，不与程序文件混放；外部证据和分析 JSON 使用程序/源码之外的独立工作目录。
+- 可选 API.txt 仅从 settings.json 所在的用户数据目录读取，移除程序目录、工作目录和父目录的自动搜寻；保留已保存配置，不自动移动或清理历史文件。
+- 增加使用合成配置的路径隔离回归，确认更换工作目录不会改变默认入口，也不会把配置或结果写入程序目录。
+- 首个 x64 自包含 ZIP 发布放入 bin/publish，仅打包程序、运行依赖、资源及随附的协议和工具，不包含用户配置、日志、证据或数据库。
+- 补齐发布中的图标资源和旧 Win2D 包的 Windows x64 原生依赖；命令行回归兼容自包含发布目录的 SQLite 布局。
+
+## 0.3.4 beta1 日常范围与活动卡更新 / 2026-09-07
+- 健康分数、活动统计和审计详情统一为紧凑概览卡，日期格缩小并均衡排列；全部 / 30 天 / 7 天切换保留所选日期。修正日期切换期间旧结果与新标题混用，刷新保留焦点及筛选，“最近审计”恢复跟随最新结果。
+- 辅助外部采集默认跳过 Security；拓展改为普通权限；新增同账号 UAC 的全量模式，覆盖五个 Windows 日志通道。扫描时长独立于模式选择，保留现有事件/级别筛选。
+- 拓展与全量共用原历史，但增量进度按模式隔离；逐通道保存成功、失败、截断或主动跳过，不因单个通道失败丢弃其余结果。
+- AGENTS.md 升至 v2，新增 ForwardedEvents、skipped/not_requested 和 limited，保留 v1 读写兼容；补充 15 天等多日回溯的有界逐批流程。仅明确跳过 Security 且其余四通道完整、有分析证据时显示日常范围分数，不混入全量均分；真实失败或截断仍不显示分数。
+- 单实例锁按当前 Windows 会话和账号共享，不再按模式或构建路径分开；重复启动只唤回已有窗口，不读取配置或触发额外 UAC。增加跨目录、并发启动、释放交接及异常退出恢复回归。
+- 修正 WinUI 位移动画在启用 Translation 前停止属性动画的异常，避免刷新停在加载状态、日期切换不更新。
+- 增加普通/全量权限分支、默认不查询 Security、覆盖状态、五通道证据、分模式进度及活动范围的合成回归；真实多日审计仅在用户明确授权后按协议单独执行，不混入测试数据。
+
+## 0.3.4 beta1 / 2026-09-07
+- 新增辅助 / 拓展双模式，“设置 → 模式”切换并提供保存退出入口；默认辅助，旧配置不含模式字段时同样默认辅助，保留 AI Hub 配置。
+- 可执行文件改为 asInvoker；辅助模式不申请提权且拒绝继承管理员令牌。拓展模式由程序请求同一用户的 UAC 授权，取消后以辅助模式打开，不改写启动偏好或混用用户数据。
+- 辅助库为 `%LOCALAPPDATA%\LocalSecurityAudit\assistant\audit_data.db`，拓展继续使用原 `audit_data.db`；同表结构，进程运行期间固定模式及数据库，不迁移或覆盖旧记录。
+- 辅助窗口只读显示，服务层阻止采集、AI 连接测试、补译、优化及数据库修改；无自动扫描或保留期清理。隐藏扫描按钮，显示模式及工作流提示，提供外部结果刷新。
+- 新增随程序分发的 AGENTS.md v1，规范 Claude / Codex 的采集范围、权限边界、证据引用、双语分析、统一字段和发布流程；程序不会启动智能体。
+- 增加 PowerShell 外部采集器与 Python 标准库发布器：通道缺失 / 截断如实记录，常见凭据脱敏，校验结果与证据后补齐来源及统计，使用参数化事务、WAL 和 RunId 幂等保护。
+- 辅助窗口通过 SQLite data_version 检测外部提交并刷新首页及趋势，保留已选日期和筛选；不完整覆盖保留 findings，但不显示健康分数、不计入趋势均值。
+- 新增合成日志、模式拦截、独立库、Python → C# 读取、WAL 刷新、并发发布及回滚回归；真实 UAC / 窗口 / 日志 / AI 测试留给用户实机验证。
+
+## 0.3.4 / 2026-09-07
+- 七日日期选择移至 Health score 卡片右上角，仅保留日期数字，选中使用强调色；完整日期随选中显示，悬浮可查看日期与扫描次数。
+- 日期控件独立于结果区域的加载过渡，支持连续切换；重复点击当前日期不再触发额外加载。
+- 来源筛选收进问题卡片，统一筛选按钮形状；问题预览压缩为标题、建议和来源，保留模型标签、重复次数与时间，增加打开详情的箭头及原生悬浮反馈。
+- 分类明细默认收起并保留用户展开状态；空问题时隐藏优先列表，修正历史空日期和来源／严重程度筛选的提示，评分扣分说明改为悬浮提示。
+
+## 0.3.3 / 2026-09-07
+- AI 分析支持 GPT-5.6 Luna / Terra / Sol、GPT-6 Astra 及 gpt-5.6 网关别名；统一 256k 上下文，保留现有 effort。
+- 设置新增“优化”标签，按 Luna → Terra → Sol → Astra 单向优化历史双语分析；未知型号受保护，未标注与别名记录仅允许 Astra 优化。备用入口也必须请求选定型号。
+- 每条分析保存并显示模型标签、原模型与优化时间；优化逐批保存、校验双语完整性和键对应关系，保留原始证据及未知字段，拒绝并发覆盖并更新健康评分。
+- Fast scan 重启后恢复最近成功审计的 ScanEnd，避免回到初始四小时窗口；Full scan 保持 24 小时。
+- 首页 Health Score 上方增加最近七天日期按钮，联动当天最近一份可读审计、评分、来源分类和问题详情，空日期显示空态。
+- 1D / 7D / 30D 切换只发布一次结果，复用图表序列、固定分类图高度，加入短淡入与位移动画，并遵循系统动画设置。
+
+## 0.3.2 / 2026-09-07
+- Settings 的 AI analysis 将 Endpoints 移到 Audit policy 上方。
+- AI 流式和普通 JSON 响应统一检查失败、取消及不完整状态；远端取消或输出不完整时停止扫描，不再重复请求。输出 token 用尽时给出明确提示。
+- 某个并行批次最终失败后取消其他请求及排队批次，保留原始失败原因，避免远端失败后仍长时间显示处理中。
+- 临时网络故障最多尝试两次；请求超时不在同一入口重复等待，仍支持可用的 Fallback。连接等待显示耗时，重试显示等待时间和次数。
+- 增加本地 HTTP 模拟回归，覆盖流式取消、失败切换、重试上限、并行停止与慢响应进度；服务端原始错误内容不再写入界面或诊断日志。
+
+## 0.3.1 / 2026-09-07
+- 修复 System / Application 查询漏掉 Critical 事件的问题，补齐 Setup 采集和 Security 审计事件；防火墙审计改从正确的 Security 通道读取。Full scan 仍固定为 24 小时。
+- 区分 System BugCheck 1001 与 Application 1001；问题合并保留日志和来源边界，AI 提示明确分析 Kernel-Power 41 等异常重启事件，不把事件本身当作电源故障证据。
+- 首页增加总览、Application、Security、Setup、System 来源标签，联动问题数量、严重程度筛选和详情。
+- 侧栏显示阶段完成度百分比、当前阶段百分比及批次数；读取分组更新不会重置流程，失败不会显示为 100%。
+
+## 0.3.0 / 2026-09-07
+- 移除 Dashboard 顶部重复扫描指示和手动刷新；最新记录损坏时回退到最近可用记录，读取失败时保留已展示结果。
+- 趋势页提供 1D / 7D / 30D 切换，按本地自然日统一查询和清理边界；汇总全部扫描的问题报告和有效评估均值。
+- 增加历史问题分页、严重程度筛选及来源和解决方案详情；扫描完成、历史补译及语言切换后自动更新，旧请求不会覆盖新选择。
+- 默认保留 30 天，旧版 7 天配置一次性迁移；保留手动自定义的 3 天和 14 天选项。
+
+## 0.2.1 / 2026-09-07
+- 扫描开始前隐藏侧栏流程和历史保存提示，移除左下角语言说明；扫描结束后保留本次结果状态。
+- 折叠入口改用三横线图标，六个阶段使用一致的高度；批次数字与进度条同行显示。
+- 默认字体调整为 Segoe UI Variable Small、9pt（12 DIP）；趋势图补齐中文字体回退，覆盖日期、分类和浮动提示。
+
+## 0.2.0 / 2026-09-07
+- 扫描进度和保存时间移入可折叠侧栏，显示路由、批次、双语分析和历史补译的实际状态。
+- 侧栏节点固定高度，流式详情附批次编号并限频刷新；状态淡入和真实批次进度平滑过渡，遵循系统动画设置。
+- 设置支持中英切换；AI 同次生成并保存两种语言，旧结果在下一次扫描后后台补译，已完成的批次可断点保存。
+- 问题详情区分分析与建议、原始日志证据；补全来源、记录号、账号、IP 和时间，避免同 ID 事件误匹配。
+- 保留独立日志证据，限制重复事件采样，显示收集、实际分析和过滤数量；未分析的扫描不计为健康满分。
+- 修复管理员启动时过早访问 WinUI 资源导致的主窗口崩溃，保留 requireAdministrator。
+
+## 0.1.0 (2026-09-03)
+- 初始版本：基于 WinUI 3、Mica 材质与 SQLite 的本地 Windows 事件日志安全审计工作台。
