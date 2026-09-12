@@ -4,106 +4,231 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LocalSecurityAudit.ViewModels"
     Background="Transparent">
+
+    <!--
+    Design improvements:
+    - Grid-based root layout for better structure control
+    - Consistent spacing rhythm (24dp grid: 8, 16, 24, 32)
+    - Improved visual hierarchy through typography and spacing
+    - Better card structure with clear content organization
+    - Enhanced interactive feedback and transitions
+    -->
+
     <Grid RowDefinitions="Auto,*">
-        <StackPanel Grid.Row="0" Padding="32,18,32,8" Spacing="2">
+
+        <!-- Page header with improved spacing -->
+        <Grid Grid.Row="0" Padding="32,24,32,12">
             <TextBlock Text="{Binding [Optimization], Source={StaticResource AppText}}"
-                       Style="{StaticResource SubtitleTextStyle}" />
-        </StackPanel>
-        <ScrollViewer Grid.Row="1" Padding="32,8,32,32"
+                       Style="{StaticResource SubtitleTextStyle}"
+                       FontSize="24"
+                       FontWeight="SemiBold" />
+        </Grid>
+
+        <!-- Main content area -->
+        <ScrollViewer Grid.Row="1"
+                      Padding="32,12,32,32"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
-            <StackPanel Spacing="16">
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="16">
-                        <TextBlock Text="{Binding [Temporaryfiles], Source={StaticResource AppText}}"
+
+            <!-- Grid layout for cards with consistent 24dp spacing -->
+            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="24">
+
+                <!-- Card 1: Scan Action Card -->
+                <Border Grid.Row="0"
+                        Style="{StaticResource CardStyle}"
+                        Padding="24"
+                        CornerRadius="8">
+                    <Grid RowDefinitions="Auto,Auto" RowSpacing="16">
+                        <!-- Section title -->
+                        <TextBlock Grid.Row="0"
+                                   Text="{Binding [Temporaryfiles], Source={StaticResource AppText}}"
                                    Style="{StaticResource BodyStrongTextStyle}"
-                                   FontSize="16" />
-                        <Button Content="{Binding [Scanfortemporaryfiles], Source={StaticResource AppText}}"
+                                   FontSize="18"
+                                   FontWeight="SemiBold" />
+
+                        <!-- Action button -->
+                        <Button Grid.Row="1"
+                                Content="{Binding [Scanfortemporaryfiles], Source={StaticResource AppText}}"
                                 Command="{x:Bind ViewModel.ScanTempFilesCommand}"
                                 Style="{StaticResource AccentButtonStyle}"
-                                Height="32"
-                                Padding="12,0" />
-                    </StackPanel>
+                                Height="36"
+                                MinWidth="160"
+                                Padding="16,0"
+                                CornerRadius="18"
+                                HorizontalAlignment="Left">
+                            <Button.Resources>
+                                <!-- Smooth hover transition -->
+                                <ResourceDictionary>
+                                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="{ThemeResource AccentFillColorSecondary}" />
+                                </ResourceDictionary>
+                            </Button.Resources>
+                        </Button>
+                    </Grid>
                 </Border>
 
-                <Border Style="{StaticResource CardStyle}"
+                <!-- Card 2: Scanned Files List Card (conditional visibility) -->
+                <Border Grid.Row="1"
+                        Style="{StaticResource CardStyle}"
+                        Padding="24"
+                        CornerRadius="8"
                         Visibility="{x:Bind ViewModel.HasScannedFiles, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <StackPanel Spacing="12">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                            <StackPanel Spacing="2">
+                    <Grid RowDefinitions="Auto,Auto" RowSpacing="16">
+
+                        <!-- Card header with title and summary -->
+                        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                            <StackPanel Grid.Column="0" Spacing="4">
                                 <TextBlock Text="{Binding [Scannedfiles], Source={StaticResource AppText}}"
                                            Style="{StaticResource BodyStrongTextStyle}"
-                                           FontSize="16" />
+                                           FontSize="18"
+                                           FontWeight="SemiBold" />
                                 <TextBlock Text="{x:Bind ViewModel.ScannedFilesSummary, Mode=OneWay}"
-                                           Style="{StaticResource CaptionTextStyle}" />
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           FontSize="13" />
                             </StackPanel>
                         </Grid>
 
-                        <ListView ItemsSource="{x:Bind ViewModel.ScannedFiles, Mode=OneWay}"
+                        <!-- Files list with improved structure -->
+                        <ListView Grid.Row="1"
+                                  ItemsSource="{x:Bind ViewModel.ScannedFiles, Mode=OneWay}"
                                   SelectionMode="Multiple"
                                   IsItemClickEnabled="False"
-                                  MaxHeight="400"
+                                  MaxHeight="420"
                                   BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                   BorderThickness="1"
-                                  CornerRadius="6">
+                                  CornerRadius="8"
+                                  Padding="0">
                             <ListView.ItemTemplate>
                                 <DataTemplate x:DataType="vm:TempFileInfo">
-                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12" Padding="8,6">
-                                        <CheckBox IsChecked="{x:Bind IsSelected, Mode=TwoWay}" />
-                                        <StackPanel Grid.Column="1" Spacing="2">
+                                    <!-- Grid-based item layout for better alignment -->
+                                    <Grid ColumnDefinitions="Auto,*,Auto"
+                                          ColumnSpacing="16"
+                                          Padding="16,12"
+                                          MinHeight="64">
+
+                                        <!-- Selection checkbox -->
+                                        <CheckBox Grid.Column="0"
+                                                  IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                                                  VerticalAlignment="Center"
+                                                  MinWidth="0" />
+
+                                        <!-- File information -->
+                                        <StackPanel Grid.Column="1"
+                                                    Spacing="4"
+                                                    VerticalAlignment="Center">
                                             <TextBlock Text="{x:Bind FilePath}"
-                                                       Style="{StaticResource BodySmallTextStyle}"
+                                                       Style="{StaticResource BodyTextStyle}"
+                                                       FontSize="14"
                                                        TextTrimming="CharacterEllipsis"
+                                                       TextWrapping="NoWrap"
                                                        ToolTipService.ToolTip="{x:Bind FilePath}" />
                                             <TextBlock Text="{x:Bind LastModifiedText}"
-                                                       Style="{StaticResource CaptionTextStyle}" />
+                                                       Style="{StaticResource CaptionTextStyle}"
+                                                       FontSize="12"
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                         </StackPanel>
+
+                                        <!-- File size with emphasis -->
                                         <TextBlock Grid.Column="2"
                                                    Text="{x:Bind SizeText}"
-                                                   Style="{StaticResource BodySmallTextStyle}"
-                                                   VerticalAlignment="Center" />
+                                                   Style="{StaticResource BodyStrongTextStyle}"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"
+                                                   HorizontalAlignment="Right"
+                                                   Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>
                         </ListView>
-                    </StackPanel>
+                    </Grid>
                 </Border>
 
-                <Border Style="{StaticResource CardStyle}"
+                <!-- Card 3: Confirmation Card (conditional visibility) -->
+                <Border Grid.Row="2"
+                        Style="{StaticResource CardStyle}"
+                        Padding="24"
+                        CornerRadius="8"
                         Visibility="{x:Bind ViewModel.HasScannedFiles, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <StackPanel Spacing="12">
-                        <TextBlock Text="{Binding [Confirmation], Source={StaticResource AppText}}"
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="16">
+
+                        <!-- Section title -->
+                        <TextBlock Grid.Row="0"
+                                   Text="{Binding [Confirmation], Source={StaticResource AppText}}"
                                    Style="{StaticResource BodyStrongTextStyle}"
-                                   FontSize="16" />
+                                   FontSize="18"
+                                   FontWeight="SemiBold" />
 
-                        <StackPanel Spacing="8">
-                            <TextBlock>
-                                <Run Text="{Binding [Selectedfiles], Source={StaticResource AppText}}" />
-                                <Run Text=": " />
-                                <Run Text="{x:Bind ViewModel.SelectedFiles.Count, Mode=OneWay}" FontWeight="SemiBold" />
-                            </TextBlock>
+                        <!-- Summary statistics with improved hierarchy -->
+                        <Grid Grid.Row="1"
+                              RowDefinitions="Auto,Auto"
+                              RowSpacing="12"
+                              Padding="16"
+                              Background="{ThemeResource LayerFillColorDefaultBrush}"
+                              CornerRadius="6">
 
-                            <TextBlock>
-                                <Run Text="{Binding [Estimatedspace], Source={StaticResource AppText}}" />
-                                <Run Text=": " />
-                                <Run Text="{x:Bind ViewModel.EstimatedSpace, Mode=OneWay}" FontWeight="SemiBold" />
-                            </TextBlock>
-                        </StackPanel>
+                            <!-- Selected files count -->
+                            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding [Selectedfiles], Source={StaticResource AppText}}"
+                                           Style="{StaticResource BodyTextStyle}"
+                                           FontSize="14"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1"
+                                           Text="{x:Bind ViewModel.SelectedFiles.Count, Mode=OneWay}"
+                                           Style="{StaticResource BodyStrongTextStyle}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold"
+                                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                           VerticalAlignment="Center" />
+                            </Grid>
 
-                        <Button Content="{Binding [Confirmcleanup], Source={StaticResource AppText}}"
+                            <!-- Estimated space -->
+                            <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding [Estimatedspace], Source={StaticResource AppText}}"
+                                           Style="{StaticResource BodyTextStyle}"
+                                           FontSize="14"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1"
+                                           Text="{x:Bind ViewModel.EstimatedSpace, Mode=OneWay}"
+                                           Style="{StaticResource BodyStrongTextStyle}"
+                                           FontSize="20"
+                                           FontWeight="SemiBold"
+                                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                           VerticalAlignment="Center" />
+                            </Grid>
+                        </Grid>
+
+                        <!-- Confirmation button -->
+                        <Button Grid.Row="2"
+                                Content="{Binding [Confirmcleanup], Source={StaticResource AppText}}"
                                 Command="{x:Bind ViewModel.ConfirmCleanupCommand}"
                                 IsEnabled="{x:Bind ViewModel.CanConfirmCleanup, Mode=OneWay}"
                                 Style="{StaticResource AccentButtonStyle}"
-                                Height="32"
-                                Padding="12,0" />
+                                Height="36"
+                                MinWidth="160"
+                                Padding="16,0"
+                                CornerRadius="18"
+                                HorizontalAlignment="Left">
+                            <Button.Resources>
+                                <ResourceDictionary>
+                                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="{ThemeResource AccentFillColorSecondary}" />
+                                </ResourceDictionary>
+                            </Button.Resources>
+                        </Button>
 
-                        <InfoBar IsOpen="{x:Bind ViewModel.IsExecutionPending, Mode=OneWay}"
+                        <!-- InfoBar for execution pending state -->
+                        <InfoBar Grid.Row="3"
+                                 IsOpen="{x:Bind ViewModel.IsExecutionPending, Mode=OneWay}"
                                  Severity="Informational"
                                  IsClosable="False"
+                                 CornerRadius="6"
                                  Message="Execution pending - file service integration in W3" />
-                    </StackPanel>
+                    </Grid>
                 </Border>
-            </StackPanel>
+
+            </Grid>
         </ScrollViewer>
     </Grid>
 </Page>
